@@ -1,0 +1,45 @@
+{
+  "name": "education-forum",
+  "version": "1.0.0",
+  "private": true,
+  "main": "index.ts",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "web": "expo start --web",
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-strip-types --test tests/*.test.ts",
+    "build:web": "expo export --platform web",
+    "test:database": "node tests/database.integration.mjs",
+    "test:browser": "node tests/browser.integration.cjs",
+    "format": "prettier --write App.tsx src tests *.json",
+    "build:native": "expo export --platform ios --platform android --output-dir dist-native"
+  },
+  "dependencies": {
+    "@expo/vector-icons": "^15.0.0",
+    "@react-native-async-storage/async-storage": "2.2.0",
+    "@supabase/supabase-js": "^2.57.0",
+    "expo": "^57.0.24",
+    "expo-document-picker": "~57.0.2",
+    "expo-file-system": "~57.0.7",
+    "expo-status-bar": "~57.0.1",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "react-native": "0.86.3",
+    "react-native-url-polyfill": "^2.0.0",
+    "react-native-web": "^0.21.0"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8",
+    "@types/react": "~19.2.4",
+    "playwright": "^1.63.0",
+    "prettier": "^3.9.8",
+    "typescript": "~6.0.3"
+  },
+  "overrides": {
+    "xcode": {
+      "uuid": "^11.1.1"
+    }
+  }
+}

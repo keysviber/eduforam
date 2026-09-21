@@ -1,0 +1,25 @@
+{
+  "expo": {
+    "name": "Education Forum",
+    "slug": "education-forum",
+    "scheme": "educationforum",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.educationforum.app"
+    },
+    "android": {
+      "package": "com.educationforum.app"
+    },
+    "web": {
+      "bundler": "metro",
+      "name": "Education Forum"
+    },
+    "plugins": [
+      "expo-document-picker",
+      "expo-status-bar"
+    ]
+  }
+}
