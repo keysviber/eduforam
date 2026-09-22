@@ -11,7 +11,11 @@
       "bundleIdentifier": "com.educationforum.app"
     },
     "android": {
-      "package": "com.educationforum.app"
+      "package": "com.educationforum.app",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/icon-v2.png",
+        "backgroundColor": "#2c5542"
+      }
     },
     "web": {
       "bundler": "metro",
@@ -19,7 +23,17 @@
     },
     "plugins": [
       "expo-document-picker",
-      "expo-status-bar"
-    ]
+      "expo-status-bar",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#2c5542",
+          "image": "./assets/icon-v2.png",
+          "imageWidth": 180
+        }
+      ]
+    ],
+    "icon": "./assets/icon-v2.png",
+    "backgroundColor": "#fafbf7"
   }
 }

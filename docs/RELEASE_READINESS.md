@@ -4,7 +4,7 @@ This is an initial implementation, not a claim that the complete specification i
 
 ## Implemented
 
-- Shared native/web React Native UI, responsive desktop navigation and mobile navigation.
+- Shared React Native UI with five fixed mobile tabs, compact home, horizontal reading shelf, two-column library, native sheets, hardware-back handling, safe areas, and haptics.
 - Original education-first visual system and small, secondary community area.
 - Library discovery with title/author/subject search, level filters, newest sorting, sample reader, bookmarks, PDF upload, private submission, approval, rejection, change requests, removal, and decision reasons.
 - Supabase email sign-up/sign-in/sign-out and reset email request. Server-owned account roles; administrative permissions are checked inside RPCs.
@@ -61,7 +61,7 @@ This is an initial implementation, not a claim that the complete specification i
 
 ## Production operations
 
-- Final branding assets, app icons, splash screens, support URL, privacy policy, terms and store metadata.
+- Owner review of the supplied original app icons and splash screen; support URL, privacy policy, terms and store metadata.
 - Managed deployment, CI, migration rollback strategy, backups and restore drills, error monitoring, security review, load testing, production credentials and secret rotation.
 - Real iOS/Android device testing (file selection, keyboard, safe areas, signed URL opening, accessibility, connectivity loss, auth persistence), followed by TestFlight / Play internal testing.
 - Owner-selected package identifiers, Apple/Google developer accounts, signing, EAS configuration, and submitted store builds.
@@ -87,3 +87,7 @@ This is an initial implementation, not a claim that the complete specification i
 - Headless Chrome verified desktop/mobile rendering, library search, reading, bookmarks, vocabulary quiz, private idea submission, admin approval, and reload persistence.
 - Web production export and iOS/Android Hermes bundle exports passed. These are JavaScript bundles, not signed installable apps. Native signed binaries and physical device tests have not been performed.
 - Expo SDK upgraded to 57 with its matching React Native modules. A targeted `xcode → uuid ^11.1.1` override preserves the v4 API and removes the transitive UUID advisory. npm reported zero vulnerabilities after installation.
+
+## Mobile app redesign (22 September 2026)
+
+The desktop dashboard layout was replaced with five fixed phone tabs, compact cards, a swipeable reading shelf, a two-column library and a persisted last-opened book. Native safe areas, haptics, keyboard adjustments, dismissible iOS sheets, Android back handling, branded icon/splash assets and APK build configuration are included. Updated browser flow tests passed. See [PHONE_APP.md](PHONE_APP.md) for native build requirements and the unresolved local Ruby/CocoaPods toolchain blocker. This does not change the remaining production functionality listed above.

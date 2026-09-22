@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef, useCallback } from "react";
 import {
   View,
   Text,
@@ -7,11 +7,18 @@ import {
   Pressable,
   TextInput,
   Modal,
-  useWindowDimensions,
-  SafeAreaView,
+  Platform,
+  BackHandler,
+  RefreshControl,
   Linking,
   ActivityIndicator,
 } from "react-native";
+import {
+  SafeAreaProvider,
+  SafeAreaView,
+  useSafeAreaInsets,
+} from "react-native-safe-area-context";
+import * as Haptics from "expo-haptics";
 import { StatusBar } from "expo-status-bar";
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -32,15 +39,52 @@ import {
 } from "./src/domain";
 
 type IconName = React.ComponentProps<typeof Ionicons>["name"];
-const nav: { name: string; icon: IconName }[] = [
-  { name: "Overview", icon: "grid-outline" },
-  { name: "Library", icon: "book-outline" },
-  { name: "Learning", icon: "school-outline" },
-  { name: "Languages", icon: "globe-outline" },
-  { name: "Opportunities", icon: "heart-outline" },
-  { name: "Community", icon: "people-outline" },
-  { name: "Earnings", icon: "wallet-outline" },
+const tabs: {
+  name: string;
+  label: string;
+  icon: IconName;
+  selectedIcon: IconName;
+}[] = [
+  {
+    name: "Overview",
+    label: "Home",
+    icon: "home-outline",
+    selectedIcon: "home",
+  },
+  {
+    name: "Library",
+    label: "Library",
+    icon: "book-outline",
+    selectedIcon: "book",
+  },
+  {
+    name: "Learning",
+    label: "Learn",
+    icon: "school-outline",
+    selectedIcon: "school",
+  },
+  {
+    name: "Opportunities",
+    label: "Support",
+    icon: "heart-outline",
+    selectedIcon: "heart",
+  },
+  {
+    name: "Account",
+    label: "You",
+    icon: "person-outline",
+    selectedIcon: "person",
+  },
 ];
+const parentTab = (page: string) =>
+  page === "Languages"
+    ? "Learning"
+    : ["Premier", "Earnings", "Community", "Admin"].includes(page)
+      ? "Account"
+      : page;
+function tactile() {
+  if (Platform.OS !== "web") void Haptics.selectionAsync().catch(() => {});
+}
 function Icon({
   name,
   color = "#52665c",
@@ -74,8 +118,20 @@ function Button({
   );
 }
 export default function App() {
-  const { width } = useWindowDimensions();
-  const desktop = width > 950;
+  return (
+    <SafeAreaProvider>
+      <View style={s.canvas}>
+        <AppContent />
+      </View>
+    </SafeAreaProvider>
+  );
+}
+function AppContent() {
+  const insets = useSafeAreaInsets();
+  const scrollRef = useRef<ScrollView>(null);
+  const [routeHistory, setRouteHistory] = useState<string[]>([]);
+  const [refreshing, setRefreshing] = useState(false);
+  const [lastRead, setLastRead] = useState<string | null>(null);
   const [page, setPage] = useState("Overview"),
     [entries, setEntries] = useState<Entry[]>(backend ? [] : initialEntries),
     [saved, setSaved] = useState<string[]>([]),
@@ -184,10 +240,59 @@ export default function App() {
         JSON.stringify({ entries, saved, progress, history }),
       ).catch(() => setNotice("Your device could not save these changes."));
   }, [entries, saved, progress, history, ready]);
-  function go(p: string) {
+  function go(p: string, root = false) {
+    tactile();
+    setRouteHistory((v) => (root ? [] : p === page ? v : [...v, page]));
     setPage(p);
+    setNotice("");
     setSearch("");
     setCategory("All subjects");
+    scrollRef.current?.scrollTo({ y: 0, animated: false });
+  }
+  const goBack = useCallback(() => {
+    if (!routeHistory.length) return false;
+    setPage(routeHistory[routeHistory.length - 1]);
+    setRouteHistory((v) => v.slice(0, -1));
+    setNotice("");
+    scrollRef.current?.scrollTo({ y: 0, animated: false });
+    return true;
+  }, [routeHistory]);
+  useEffect(() => {
+    const subscription = BackHandler.addEventListener(
+      "hardwareBackPress",
+      () => {
+        if (goBack()) return true;
+        if (page !== "Overview") {
+          setPage("Overview");
+          return true;
+        }
+        return false;
+      },
+    );
+    return () => subscription.remove();
+  }, [goBack, page]);
+  useEffect(() => {
+    void AsyncStorage.getItem("ef-last-read")
+      .then(setLastRead)
+      .catch(() => {});
+  }, []);
+  useEffect(() => {
+    if (reader?.kind === "book") {
+      setLastRead(reader.id);
+      void AsyncStorage.setItem("ef-last-read", reader.id).catch(() => {});
+    }
+  }, [reader?.id]);
+  async function pullToRefresh() {
+    setRefreshing(true);
+    try {
+      if (backend) await refresh();
+    } catch (e) {
+      setNotice(
+        e instanceof Error ? e.message : "Unable to refresh. Try again.",
+      );
+    } finally {
+      setRefreshing(false);
+    }
   }
   function openForm(kind: Kind) {
     if (backend && !user) {
@@ -362,14 +467,9 @@ export default function App() {
       </View>
     );
   }
-  function BookCard({ book }: { book: Entry }) {
+  function BookCard({ book, shelf = false }: { book: Entry; shelf?: boolean }) {
     return (
-      <View
-        style={[
-          s.bookCard,
-          { width: desktop ? "23%" : width > 600 ? "47%" : "100%" },
-        ]}
-      >
+      <View style={[s.bookCard, { width: shelf ? 154 : "47%" }]}>
         <Pressable
           onPress={() => setReader(book)}
           accessibilityRole="button"
@@ -377,7 +477,7 @@ export default function App() {
           style={[s.cover, { backgroundColor: book.color }]}
         >
           <View style={s.coverTop}>
-            <Text style={s.coverLabel}>EDUCATION FORUM / READ</Text>
+            <Text style={s.coverLabel}>FORUM / READ</Text>
             <Icon name="sparkles-outline" color="#fff" size={20} />
           </View>
           <View style={s.orbit} />
@@ -387,6 +487,9 @@ export default function App() {
         <View style={s.row}>
           <Text style={s.category}>{book.category}</Text>
           <Pressable
+            accessibilityRole="button"
+            hitSlop={8}
+            style={s.bookmarkButton}
             accessibilityLabel={
               saved.includes(book.id) ? "Remove bookmark" : "Save book"
             }
@@ -442,253 +545,256 @@ export default function App() {
     );
   }
   return (
-    <SafeAreaView style={s.safe}>
+    <SafeAreaView
+      edges={["top", "left", "right"]}
+      style={[s.safe, Platform.OS === "web" && s.webApp]}
+    >
       <StatusBar style="dark" />
       <View style={s.shell}>
-        {desktop && (
-          <View style={s.sidebar}>
-            <View style={s.brand}>
-              <View style={s.logo}>
-                <Icon name="book" color="white" size={24} />
-              </View>
-              <Text style={s.brandText}>
-                education<Text style={{ color: "#9eaf9e" }}>.</Text>
-                {"\n"}
-                <Text
-                  style={{ fontSize: 13, fontWeight: "400", letterSpacing: 3 }}
-                >
-                  FORUM
-                </Text>
-              </Text>
-            </View>
-            <Text style={[s.eyebrow, { marginTop: 37, marginBottom: 15 }]}>
-              YOUR LEARNING SPACE
-            </Text>
-            {nav.map((n) => (
-              <Pressable
-                key={n.name}
-                onPress={() => go(n.name)}
-                style={[s.nav, page === n.name && s.navActive]}
-              >
-                <Icon
-                  name={n.icon}
-                  color={page === n.name ? "#245642" : "#738078"}
-                />
-                <Text
-                  style={[
-                    s.navText,
-                    page === n.name && { color: "#245642", fontWeight: "700" },
-                  ]}
-                >
-                  {n.name}
-                </Text>
-                {n.name === "Opportunities" && <View style={s.dot} />}
-              </Pressable>
-            ))}
-            <View style={{ flex: 1 }} />
-            <View style={s.premierCard}>
-              <Icon name="sparkles-outline" />
-              <Text style={s.cardTitle}>A little more possibility.</Text>
-              <Text style={s.small}>
-                Discover your next chapter with Premier.
-              </Text>
-              <Button
-                label="Explore Premier ↗"
-                secondary
-                onPress={() => go("Premier")}
-              />
-            </View>
-            <Pressable onPress={() => go("Account")} style={s.nav}>
-              <Icon name="settings-outline" />
-              <Text style={s.navText}>Account & settings</Text>
-            </Pressable>
-            {admin && (
-              <Pressable style={s.nav} onPress={() => go("Admin")}>
-                <Icon name="shield-checkmark-outline" />
-                <Text style={s.navText}>Admin dashboard</Text>
-              </Pressable>
-            )}
-            <Text style={s.sidebarFoot}>Made for curious minds.</Text>
-          </View>
-        )}
         <View style={{ flex: 1 }}>
           <View style={s.topbar}>
-            <View style={s.row}>
-              <Text style={s.topTitle}>
-                {desktop
-                  ? "Your next chapter starts here."
-                  : "education. forum"}
-              </Text>
-              {desktop && <Text style={s.topBadge}>LEARN SOMETHING NEW</Text>}
+            <View style={s.headerBrand}>
+              {routeHistory.length > 0 ? (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Go back"
+                  hitSlop={8}
+                  style={s.headerIcon}
+                  onPress={goBack}
+                >
+                  <Icon name="chevron-back" size={25} />
+                </Pressable>
+              ) : (
+                <View style={s.appLogo}>
+                  <Icon name="book" color="#fff" size={21} />
+                </View>
+              )}
+              <View>
+                <Text style={s.topTitle}>
+                  {page === "Overview"
+                    ? "education forum"
+                    : tabs.find((t) => t.name === page)?.label || page}
+                </Text>
+                {page === "Overview" && (
+                  <Text style={s.brandCaption}>
+                    A little learning. Every day.
+                  </Text>
+                )}
+              </View>
             </View>
-            <Pressable onPress={() => go("Account")} style={s.avatar}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Open your profile"
+              onPress={() => go("Account", true)}
+              style={s.avatar}
+            >
               <Text style={{ color: "#315542", fontWeight: "700" }}>
                 {user?.email?.[0].toUpperCase() || "EF"}
               </Text>
             </Pressable>
           </View>
-          {!backend && (
-            <View style={s.demoBar}>
-              <Text style={s.demoText}>
-                Interactive preview · sample content · no real payments
-              </Text>
-            </View>
-          )}
           <ScrollView
-            contentContainerStyle={[s.main, { padding: desktop ? 36 : 20 }]}
+            ref={scrollRef}
+            contentContainerStyle={s.main}
+            showsVerticalScrollIndicator={false}
             keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="on-drag"
+            automaticallyAdjustKeyboardInsets
+            refreshControl={
+              <RefreshControl
+                refreshing={refreshing}
+                onRefresh={() => void pullToRefresh()}
+                tintColor="#2c5744"
+              />
+            }
           >
             {page === "Overview" && (
               <>
-                <Heading
-                  eyebrow="A GOOD DAY TO GROW"
-                  title="Make room for discovery."
-                  subtitle="A book, a new skill, a brighter future. It all starts here."
-                />
-                <View
-                  style={[
-                    s.hero,
-                    { flexDirection: desktop ? "row" : "column" },
-                  ]}
-                >
-                  <View style={{ flex: 1, zIndex: 1 }}>
-                    <Text style={s.heroLabel}>
-                      BIG IDEAS. OPEN POSSIBILITIES.
+                <View style={s.greetingRow}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={s.eyebrow}>YOUR DAILY DOSE OF DISCOVERY</Text>
+                    <Text style={s.homeHeading}>
+                      What will you learn today?
                     </Text>
-                    <Text style={s.heroTitle}>
-                      Your world is bigger{"\n"}with every page.
-                    </Text>
-                    <Text style={s.heroText}>
-                      Explore a library built for curious minds.{"\n"}Learn at
-                      your pace. Go further, together.
-                    </Text>
-                    <View style={{ alignSelf: "flex-start", marginTop: 24 }}>
-                      <Button
-                        label="Explore the library   →"
-                        onPress={() => go("Library")}
-                      />
-                    </View>
                   </View>
-                  <View style={s.heroArt}>
-                    <View style={s.sun} />
-                    <View
-                      style={[
-                        s.artBook,
-                        {
-                          backgroundColor: "#dba56b",
-                          transform: [{ rotate: "-15deg" }],
-                          left: 20,
-                          top: 44,
-                        },
-                      ]}
-                    >
-                      <Text style={s.artBookText}>STAY{"\n"}CURIOUS.</Text>
-                      <View style={s.bookLine} />
+                  {!backend && (
+                    <View style={s.previewPill}>
+                      <Text style={s.previewText}>DEMO</Text>
                     </View>
-                    <View
-                      style={[
-                        s.artBook,
-                        {
-                          backgroundColor: "#faf4df",
-                          transform: [{ rotate: "12deg" }],
-                          left: 105,
-                          top: 65,
-                        },
-                      ]}
-                    >
-                      <Text style={[s.artBookText, { color: "#315743" }]}>
-                        A WORLD{"\n"}OF IDEAS.
-                      </Text>
-                      <Icon name="leaf-outline" size={60} color="#688369" />
-                    </View>
-                  </View>
+                  )}
                 </View>
-                <View style={s.stats}>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Search the library"
+                  style={s.homeSearch}
+                  onPress={() => go("Library", true)}
+                >
+                  <Icon name="search-outline" color="#7b887d" />
+                  <Text style={s.searchHint}>
+                    Books, subjects, something new…
+                  </Text>
+                  <Icon name="options-outline" size={18} />
+                </Pressable>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={
+                    publicEntries.some((e) => e.id === lastRead)
+                      ? "Continue reading"
+                      : "Explore the library"
+                  }
+                  style={s.continueCard}
+                  onPress={() => {
+                    const book = publicEntries.find((e) => e.id === lastRead);
+                    if (book) setReader(book);
+                    else go("Library", true);
+                  }}
+                >
+                  <View style={{ flex: 1, gap: 9 }}>
+                    <Text style={s.continueEyebrow}>
+                      {publicEntries.some((e) => e.id === lastRead)
+                        ? "PICK UP WHERE YOU LEFT OFF"
+                        : "YOUR NEXT CHAPTER"}
+                    </Text>
+                    <Text numberOfLines={3} style={s.continueTitle}>
+                      {publicEntries.find((e) => e.id === lastRead)?.title ||
+                        "Big ideas start with a little curiosity."}
+                    </Text>
+                    <View style={s.continueAction}>
+                      <Text style={s.continueActionText}>
+                        {publicEntries.some((e) => e.id === lastRead)
+                          ? "Continue reading"
+                          : "Find your next read"}
+                      </Text>
+                      <Icon name="arrow-forward" size={17} color="#fff" />
+                    </View>
+                  </View>
+                  <View style={s.miniBook}>
+                    <Text style={s.miniBookTop}>EDUCATION FORUM</Text>
+                    <Icon name="leaf-outline" size={40} color="#3b5a3d" />
+                    <Text style={s.miniBookBottom}>STAY CURIOUS.</Text>
+                  </View>
+                </Pressable>
+                <View style={s.momentum}>
+                  <Icon name="sparkles-outline" size={19} color="#8e7839" />
+                  <Text style={s.momentumText}>
+                    {Object.keys(progress).length
+                      ? `${Object.keys(progress).length} introductory lessons completed`
+                      : "Make a little time for a new idea."}
+                  </Text>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Open learning"
+                    onPress={() => go("Learning", true)}
+                  >
+                    <Icon name="chevron-forward" size={18} />
+                  </Pressable>
+                </View>
+                <View style={s.quickActions}>
                   {[
                     {
-                      icon: "book-outline",
-                      label: "Your reading list",
-                      value: `${saved.length} saved books`,
-                      page: "Library",
+                      name: "Languages",
+                      icon: "globe-outline",
+                      label: "Languages",
                     },
                     {
-                      icon: "flame-outline",
-                      label: "Keep your momentum",
-                      value: `${Object.keys(progress).length} lessons explored`,
-                      page: "Languages",
-                    },
-                    {
+                      name: "Opportunities",
                       icon: "heart-outline",
-                      label: "Grow together",
-                      value: "Discover opportunities",
-                      page: "Opportunities",
+                      label: "Student support",
+                    },
+                    {
+                      name: "Account",
+                      icon: "bookmark-outline",
+                      label: "Saved books",
+                    },
+                    {
+                      name: "Premier",
+                      icon: "sparkles-outline",
+                      label: "Premier",
                     },
                   ].map((x) => (
                     <Pressable
-                      key={x.label}
-                      onPress={() => go(x.page)}
-                      style={s.stat}
+                      accessibilityRole="button"
+                      accessibilityLabel={x.label}
+                      key={x.name}
+                      onPress={() => go(x.name)}
+                      style={s.quickAction}
                     >
-                      <View style={s.iconTile}>
-                        <Icon name={x.icon as IconName} />
+                      <View style={s.quickIcon}>
+                        <Icon name={x.icon as IconName} size={23} />
                       </View>
-                      <View>
-                        <Text style={s.small}>{x.label}</Text>
-                        <Text style={s.statValue}>{x.value}</Text>
-                      </View>
-                      <Text style={{ marginLeft: "auto", color: "#789080" }}>
-                        ↗
+                      <Text style={s.quickLabel}>{x.label}</Text>
+                    </Pressable>
+                  ))}
+                </View>
+                <View style={s.sectionTitle}>
+                  <Text style={s.sectionHeading}>Your next great read</Text>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="See all books"
+                    hitSlop={10}
+                    onPress={() => go("Library", true)}
+                  >
+                    <Text style={s.link}>See all</Text>
+                  </Pressable>
+                </View>
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={s.bookShelf}
+                >
+                  {books.slice(0, 6).map((book) => (
+                    <BookCard key={book.id} book={book} shelf />
+                  ))}
+                </ScrollView>
+                <View style={s.sectionTitle}>
+                  <Text style={s.sectionHeading}>
+                    Say hello to a new language
+                  </Text>
+                </View>
+                {languages.map((l) => (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={`Start ${l.name}`}
+                    key={l.name}
+                    style={s.languageRow}
+                    onPress={() => {
+                      setLesson(l);
+                      setAnswer("");
+                    }}
+                  >
+                    <View style={s.flagTile}>
+                      <Text style={{ fontSize: 26 }}>{l.flag}</Text>
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={s.cardTitle}>{l.name}</Text>
+                      <Text style={s.small}>
+                        {progress[l.name]
+                          ? "Introductory lesson complete"
+                          : "Beginner · Start with a hello"}
                       </Text>
-                    </Pressable>
-                  ))}
-                </View>
-                <View style={s.sectionTitle}>
-                  <Text style={s.sectionHeading}>
-                    Find your next great read
-                  </Text>
-                  <Pressable onPress={() => go("Library")}>
-                    <Text style={s.link}>View library →</Text>
+                    </View>
+                    <Icon
+                      name={
+                        progress[l.name]
+                          ? "checkmark-circle"
+                          : "chevron-forward"
+                      }
+                      color="#628158"
+                    />
                   </Pressable>
-                </View>
-                <View style={s.books}>
-                  {books.slice(0, 4).map((book) => (
-                    <BookCard key={book.id} book={book} />
-                  ))}
-                </View>
-                <View style={s.sectionTitle}>
-                  <Text style={s.sectionHeading}>
-                    A new language. A new perspective.
+                ))}
+                {!backend && (
+                  <Text style={s.demoFootnote}>
+                    Demo content · No real payments
                   </Text>
-                  <Pressable onPress={() => go("Languages")}>
-                    <Text style={s.link}>Explore →</Text>
-                  </Pressable>
-                </View>
-                <View style={s.tiles}>
-                  {languages.map((l) => (
-                    <Pressable
-                      key={l.name}
-                      style={s.languageCard}
-                      onPress={() => {
-                        setLesson(l);
-                        setAnswer("");
-                      }}
-                    >
-                      <Text style={{ fontSize: 31 }}>{l.flag}</Text>
-                      <View style={{ flex: 1 }}>
-                        <Text style={s.cardTitle}>{l.name}</Text>
-                        <Text style={s.small}>Start with a simple hello</Text>
-                      </View>
-                      <Icon name="arrow-forward" />
-                    </Pressable>
-                  ))}
-                </View>
+                )}
               </>
             )}
             {page === "Library" && (
               <>
                 <Heading
                   eyebrow="THE EDUCATION LIBRARY"
-                  title="A good book changes things."
+                  title="Your library"
                   subtitle="Discover ideas worth spending time with."
                   action={
                     <Button label="+ Upload" onPress={() => openForm("book")} />
@@ -770,9 +876,24 @@ export default function App() {
               <>
                 <Heading
                   eyebrow="LEARN WITH PURPOSE"
-                  title="Small steps. Lasting knowledge."
+                  title="Keep growing."
                   subtitle="Practical lessons to help you find your rhythm."
                 />
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Explore language lessons"
+                  style={s.languageRow}
+                  onPress={() => go("Languages")}
+                >
+                  <View style={s.quickIcon}>
+                    <Icon name="globe-outline" size={26} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={s.cardTitle}>Language learning</Text>
+                    <Text style={s.small}>French, Dutch & Spanish</Text>
+                  </View>
+                  <Icon name="chevron-forward" />
+                </Pressable>
                 <View style={s.tiles}>
                   {publicEntries
                     .filter((e) => e.kind === "course")
@@ -797,7 +918,7 @@ export default function App() {
               <>
                 <Heading
                   eyebrow="HELLO, WORLD"
-                  title="Open a new conversation."
+                  title="Learn a language"
                   subtitle="Start your journey in French, Dutch, or Spanish."
                 />
                 {languages.map((l) => (
@@ -835,7 +956,7 @@ export default function App() {
               <>
                 <Heading
                   eyebrow="GO FURTHER, TOGETHER"
-                  title="Good ideas deserve a chance."
+                  title="Go further, together."
                   subtitle="Student support and possibilities for a brighter future."
                 />
                 <View style={s.tiles}>
@@ -878,7 +999,7 @@ export default function App() {
               <>
                 <Heading
                   eyebrow="A LITTLE INSPIRATION"
-                  title="Share what you’re learning."
+                  title="Student moments"
                   subtitle="Short educational moments. Then, back to your next chapter."
                   action={
                     <Button
@@ -906,7 +1027,7 @@ export default function App() {
               <>
                 <Heading
                   eyebrow="YOUR CONTRIBUTION MATTERS"
-                  title="Create. Teach. Grow."
+                  title="Your earnings"
                   subtitle="A clear view of your earnings and payouts."
                 />
                 <View style={s.stats}>
@@ -943,7 +1064,7 @@ export default function App() {
                 <Plans notify={setNotice} />
                 <Heading
                   eyebrow="EDUCATION FORUM PREMIER"
-                  title="Invest in your next chapter."
+                  title="Explore Premier"
                   subtitle="More ways to learn, with benefits managed by the platform."
                 />
                 <View style={s.card}>
@@ -974,6 +1095,37 @@ export default function App() {
                       : "Explore the app with a local demo profile."
                   }
                 />
+                <View style={s.accountMenu}>
+                  {[
+                    {
+                      name: "Earnings",
+                      icon: "wallet-outline",
+                      label: "Earnings & payouts",
+                    },
+                    {
+                      name: "Premier",
+                      icon: "sparkles-outline",
+                      label: "Explore Premier",
+                    },
+                    {
+                      name: "Community",
+                      icon: "play-circle-outline",
+                      label: "Student moments",
+                    },
+                  ].map((item) => (
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={item.label}
+                      key={item.name}
+                      onPress={() => go(item.name)}
+                      style={s.accountMenuRow}
+                    >
+                      <Icon name={item.icon as IconName} />
+                      <Text style={s.accountMenuLabel}>{item.label}</Text>
+                      <Icon name="chevron-forward" size={18} />
+                    </Pressable>
+                  ))}
+                </View>
                 {backend ? (
                   <Button
                     label={user ? "Sign out" : "Sign in / Create account"}
@@ -1141,54 +1293,37 @@ export default function App() {
                 </View>
               </>
             )}
-            <View style={s.footer}>
-              <View style={s.row}>
-                <Icon name="leaf-outline" size={16} />
-                <Text style={s.small}> A little learning, every day.</Text>
-              </View>
-              <Text style={s.small}>Education Forum © 2026</Text>
-            </View>
           </ScrollView>
-          {!desktop && (
-            <ScrollView
-              horizontal
-              style={s.bottomNav}
-              contentContainerStyle={{ alignItems: "center" }}
-              showsHorizontalScrollIndicator={false}
-            >
-              {[
-                ...nav,
-                { name: "Account", icon: "person-outline" as IconName },
-                ...(admin
-                  ? [
-                      {
-                        name: "Admin",
-                        icon: "shield-checkmark-outline" as IconName,
-                      },
-                    ]
-                  : []),
-              ].map((n) => (
+          <View
+            accessibilityRole="tablist"
+            style={[s.bottomNav, { paddingBottom: Math.max(insets.bottom, 8) }]}
+          >
+            {tabs.map((tab) => {
+              const selected = parentTab(page) === tab.name;
+              return (
                 <Pressable
-                  key={n.name}
-                  onPress={() => go(n.name)}
+                  accessibilityRole="tab"
+                  accessibilityLabel={tab.label}
+                  accessibilityState={{ selected }}
+                  aria-selected={selected}
+                  key={tab.name}
+                  onPress={() => go(tab.name, true)}
                   style={s.mobileNav}
                 >
-                  <Icon
-                    name={n.icon}
-                    color={page === n.name ? "#245642" : "#909b92"}
-                  />
-                  <Text
-                    style={{
-                      fontSize: 10,
-                      color: page === n.name ? "#245642" : "#78867c",
-                    }}
-                  >
-                    {n.name}
+                  <View style={[s.tabIcon, selected && s.tabIconActive]}>
+                    <Icon
+                      name={selected ? tab.selectedIcon : tab.icon}
+                      color={selected ? "#28513e" : "#89938a"}
+                      size={22}
+                    />
+                  </View>
+                  <Text style={[s.tabLabel, selected && s.tabLabelActive]}>
+                    {tab.label}
                   </Text>
                 </Pressable>
-              ))}
-            </ScrollView>
-          )}
+              );
+            })}
+          </View>
         </View>
       </View>
       <Modal
@@ -1197,12 +1332,21 @@ export default function App() {
         onRequestClose={() => setReader(null)}
       >
         <SafeAreaView style={s.safe}>
-          <ScrollView contentContainerStyle={s.modalContent}>
+          <ScrollView
+            contentContainerStyle={s.modalContent}
+            automaticallyAdjustKeyboardInsets
+            keyboardShouldPersistTaps="handled"
+          >
             <Button
               secondary
               label="← Back to discovery"
               onPress={() => setReader(null)}
             />
+            {!!notice && !!reader && (
+              <Text accessibilityRole="alert" style={s.inlineNotice}>
+                {notice}
+              </Text>
+            )}
             {reader && (
               <>
                 <Text style={s.eyebrow}>
@@ -1280,6 +1424,8 @@ export default function App() {
       </Modal>
       <Modal
         visible={!!form}
+        presentationStyle="pageSheet"
+        allowSwipeDismissal
         animationType="slide"
         onRequestClose={() => setForm(null)}
       >
@@ -1287,7 +1433,13 @@ export default function App() {
           <ScrollView
             contentContainerStyle={s.modalContent}
             keyboardShouldPersistTaps="handled"
+            automaticallyAdjustKeyboardInsets
           >
+            {!!notice && !!form && (
+              <Text accessibilityRole="alert" style={s.inlineNotice}>
+                {notice}
+              </Text>
+            )}
             <Button secondary label="← Cancel" onPress={() => setForm(null)} />
             <Text style={s.heading}>
               {form === "book"
@@ -1372,7 +1524,16 @@ export default function App() {
         onRequestClose={() => setAuth(false)}
       >
         <SafeAreaView style={s.safe}>
-          <View style={s.modalContent}>
+          <ScrollView
+            contentContainerStyle={s.modalContent}
+            keyboardShouldPersistTaps="handled"
+            automaticallyAdjustKeyboardInsets
+          >
+            {!!notice && auth && (
+              <Text accessibilityRole="alert" style={s.inlineNotice}>
+                {notice}
+              </Text>
+            )}
             <Button secondary label="← Back" onPress={() => setAuth(false)} />
             <Text style={s.heading}>
               {signup ? "Your next chapter starts here." : "Welcome back."}
@@ -1440,16 +1601,22 @@ export default function App() {
                 })
               }
             />
-          </View>
+          </ScrollView>
         </SafeAreaView>
       </Modal>
       <Modal
         visible={!!lesson}
+        presentationStyle="pageSheet"
+        allowSwipeDismissal
         animationType="slide"
         onRequestClose={() => setLesson(null)}
       >
         <SafeAreaView style={s.safe}>
-          <ScrollView contentContainerStyle={s.modalContent}>
+          <ScrollView
+            contentContainerStyle={s.modalContent}
+            automaticallyAdjustKeyboardInsets
+            keyboardShouldPersistTaps="handled"
+          >
             <Button
               secondary
               label="← Back to learning"
@@ -1491,8 +1658,8 @@ export default function App() {
           </ScrollView>
         </SafeAreaView>
       </Modal>
-      {!!notice && (
-        <View style={s.toast}>
+      {!!notice && !form && !auth && !reader && !lesson && (
+        <View accessibilityRole="alert" style={s.toast}>
           <Text style={{ flex: 1, color: "white", lineHeight: 21 }}>
             {notice}
           </Text>
@@ -1513,30 +1680,10 @@ export default function App() {
   );
 }
 const s = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: "#fafbf7" },
+  canvas: { flex: 1, backgroundColor: "#e6ebe3", alignItems: "center" },
+  webApp: { maxWidth: 520, boxShadow: "0 0 60px #28412b12" },
+  safe: { flex: 1, width: "100%", backgroundColor: "#fafbf7" },
   shell: { flex: 1, flexDirection: "row" },
-  sidebar: {
-    width: 246,
-    padding: 25,
-    backgroundColor: "#fff",
-    borderRightWidth: 1,
-    borderColor: "#e5e9e1",
-  },
-  brand: { flexDirection: "row", alignItems: "center", gap: 12 },
-  logo: {
-    width: 43,
-    height: 47,
-    backgroundColor: "#2c5845",
-    borderRadius: 13,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  brandText: {
-    fontSize: 24,
-    fontWeight: "700",
-    lineHeight: 25,
-    color: "#294e3f",
-  },
   eyebrow: {
     fontSize: 10,
     fontWeight: "700",
@@ -1544,64 +1691,32 @@ const s = StyleSheet.create({
     color: "#7c8a74",
     marginBottom: 12,
   },
-  nav: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-    padding: 13,
-    marginVertical: 3,
-    borderRadius: 8,
-  },
-  navActive: { backgroundColor: "#eaf0e7" },
-  navText: { fontSize: 14, color: "#6d7970" },
-  dot: {
-    width: 5,
-    height: 5,
-    borderRadius: 5,
-    backgroundColor: "#ca9556",
-    marginLeft: "auto",
-  },
-  premierCard: {
-    backgroundColor: "#f3f4e9",
-    padding: 16,
-    borderRadius: 12,
-    gap: 10,
-    marginVertical: 20,
-  },
-  sidebarFoot: { fontSize: 11, color: "#99a094", marginTop: 17 },
   topbar: {
-    height: 78,
+    height: 68,
     backgroundColor: "#fff",
     borderBottomWidth: 1,
     borderColor: "#e6eae3",
-    paddingHorizontal: 32,
+    paddingHorizontal: 20,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
   },
-  topTitle: { fontSize: 13, color: "#637168" },
-  topBadge: {
-    fontSize: 8,
-    letterSpacing: 1.5,
-    color: "#84937d",
-    marginLeft: 18,
+  topTitle: {
+    fontSize: 17,
+    fontWeight: "700",
+    letterSpacing: -0.5,
+    color: "#2c4936",
   },
   avatar: {
-    width: 38,
-    height: 38,
+    width: 44,
+    height: 44,
     backgroundColor: "#edf0e2",
     borderRadius: 20,
     alignItems: "center",
     justifyContent: "center",
   },
-  demoBar: {
-    paddingVertical: 6,
-    backgroundColor: "#f1f0e6",
-    alignItems: "center",
-  },
-  demoText: { fontSize: 10, color: "#7c7a60" },
   main: {
-    maxWidth: 1500,
+    padding: 20,
     width: "100%",
     alignSelf: "center",
     paddingBottom: 35,
@@ -1610,74 +1725,23 @@ const s = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 12,
-    marginBottom: 27,
+    marginBottom: 20,
   },
   heading: {
-    fontSize: 34,
+    fontSize: 28,
     fontWeight: "600",
     letterSpacing: -1.3,
     color: "#263f31",
     marginBottom: 12,
   },
   muted: { fontSize: 14, lineHeight: 23, color: "#7a8479" },
-  hero: {
-    backgroundColor: "#e9eedf",
-    borderRadius: 16,
-    padding: 34,
-    minHeight: 300,
-    overflow: "hidden",
-  },
-  heroLabel: {
-    fontSize: 9,
-    fontWeight: "700",
-    letterSpacing: 2,
-    color: "#6e8061",
-    marginBottom: 18,
-  },
-  heroTitle: {
-    fontSize: 38,
-    lineHeight: 45,
-    fontWeight: "600",
-    letterSpacing: -1.3,
-    color: "#2a4b35",
-  },
-  heroText: { fontSize: 14, lineHeight: 23, color: "#78846e", marginTop: 14 },
-  heroArt: { width: 270, height: 260, alignSelf: "center" },
-  sun: {
-    position: "absolute",
-    width: 225,
-    height: 225,
-    borderRadius: 130,
-    backgroundColor: "#dbe3cc",
-    left: 38,
-    top: 9,
-  },
-  artBook: {
-    position: "absolute",
-    width: 140,
-    height: 200,
-    borderRadius: 5,
-    padding: 17,
-    boxShadow: "5px 9px 15px #00000018",
-    justifyContent: "space-between",
-  },
-  artBookText: {
-    fontSize: 23,
-    fontWeight: "800",
-    letterSpacing: -1,
-    color: "#fff7e9",
-  },
-  bookLine: {
-    height: 3,
-    backgroundColor: "#efc993",
-    width: 75,
-    marginBottom: 16,
-  },
   button: {
     backgroundColor: "#2c5744",
     paddingVertical: 13,
     paddingHorizontal: 19,
-    borderRadius: 7,
+    borderRadius: 12,
+    minHeight: 46,
+    justifyContent: "center",
     alignItems: "center",
     marginVertical: 5,
   },
@@ -1686,7 +1750,7 @@ const s = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#dce4d6",
   },
-  buttonText: { color: "white", fontSize: 12, fontWeight: "600" },
+  buttonText: { color: "white", fontSize: 13, fontWeight: "600" },
   stats: {
     flexDirection: "row",
     flexWrap: "wrap",
@@ -1705,21 +1769,7 @@ const s = StyleSheet.create({
     flex: 1,
     minWidth: 205,
   },
-  iconTile: {
-    width: 39,
-    height: 39,
-    borderRadius: 10,
-    backgroundColor: "#f2f4eb",
-    alignItems: "center",
-    justifyContent: "center",
-  },
   small: { fontSize: 11, color: "#899081", lineHeight: 18 },
-  statValue: {
-    fontSize: 13,
-    fontWeight: "600",
-    color: "#3b5141",
-    marginTop: 3,
-  },
   sectionTitle: {
     flexDirection: "row",
     alignItems: "center",
@@ -1729,7 +1779,7 @@ const s = StyleSheet.create({
     marginBottom: 19,
   },
   sectionHeading: {
-    fontSize: 21,
+    fontSize: 19,
     fontWeight: "600",
     color: "#2f4938",
     letterSpacing: -0.5,
@@ -1739,13 +1789,13 @@ const s = StyleSheet.create({
   books: {
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: 20,
+    gap: 16,
     justifyContent: "space-between",
     marginBottom: 20,
   },
   bookCard: { marginBottom: 8 },
   cover: {
-    height: 225,
+    height: 190,
     borderRadius: 8,
     padding: 20,
     overflow: "hidden",
@@ -1758,8 +1808,8 @@ const s = StyleSheet.create({
   },
   coverLabel: { fontSize: 6, color: "#ffffffc0", letterSpacing: 1 },
   coverTitle: {
-    fontSize: 26,
-    lineHeight: 29,
+    fontSize: 20,
+    lineHeight: 24,
     fontWeight: "600",
     color: "#fffaf0",
     letterSpacing: -0.7,
@@ -1797,18 +1847,6 @@ const s = StyleSheet.create({
     gap: 16,
     marginVertical: 12,
   },
-  languageCard: {
-    flex: 1,
-    minWidth: 220,
-    backgroundColor: "#fff",
-    borderWidth: 1,
-    borderColor: "#e5e9df",
-    borderRadius: 10,
-    padding: 20,
-    flexDirection: "row",
-    gap: 16,
-    alignItems: "center",
-  },
   card: {
     padding: 24,
     backgroundColor: "#fff",
@@ -1818,7 +1856,7 @@ const s = StyleSheet.create({
     marginVertical: 10,
     gap: 12,
     flexGrow: 1,
-    flexBasis: 270,
+    flexBasis: "auto",
   },
   track: {
     height: 5,
@@ -1859,29 +1897,209 @@ const s = StyleSheet.create({
     lineHeight: 23,
     color: "#839078",
   },
-  footer: {
-    marginTop: 40,
-    paddingTop: 22,
-    borderTopWidth: 1,
-    borderColor: "#e4e9dc",
-    flexDirection: "row",
-    justifyContent: "space-between",
-    flexWrap: "wrap",
-    gap: 12,
-  },
   bottomNav: {
-    height: 74,
-    flexGrow: 0,
+    flexDirection: "row",
     flexShrink: 0,
-    backgroundColor: "white",
+    paddingTop: 8,
+    backgroundColor: "#fff",
     borderTopWidth: 1,
-    borderColor: "#e3e8dc",
+    borderColor: "#e6eadf",
   },
   mobileNav: {
-    paddingHorizontal: 16,
-    paddingVertical: 13,
-    gap: 5,
+    flex: 1,
+    minHeight: 52,
+    gap: 3,
     alignItems: "center",
+    justifyContent: "center",
+  },
+  tabIcon: {
+    width: 52,
+    height: 29,
+    borderRadius: 16,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  tabIconActive: { backgroundColor: "#e9efdf" },
+  tabLabel: { fontSize: 10, fontWeight: "500", color: "#89938a" },
+  tabLabelActive: { color: "#28513e", fontWeight: "700" },
+  headerBrand: { flexDirection: "row", alignItems: "center", gap: 10 },
+  appLogo: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    backgroundColor: "#2c5744",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  headerIcon: {
+    width: 44,
+    height: 44,
+    alignItems: "center",
+    justifyContent: "center",
+    marginLeft: -10,
+  },
+  brandCaption: { fontSize: 9, color: "#8a9485", marginTop: 3 },
+  greetingRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 8,
+    marginBottom: 18,
+  },
+  homeHeading: {
+    fontSize: 27,
+    lineHeight: 33,
+    letterSpacing: -1,
+    fontWeight: "700",
+    color: "#2b4332",
+    maxWidth: 290,
+  },
+  previewPill: {
+    backgroundColor: "#efeede",
+    borderRadius: 7,
+    padding: 6,
+    marginLeft: "auto",
+  },
+  previewText: { fontSize: 8, fontWeight: "600", color: "#928963" },
+  homeSearch: {
+    flexDirection: "row",
+    gap: 10,
+    alignItems: "center",
+    padding: 14,
+    backgroundColor: "#fff",
+    borderWidth: 1,
+    borderColor: "#e7eadf",
+    borderRadius: 14,
+    marginBottom: 20,
+  },
+  searchHint: { flex: 1, fontSize: 12, color: "#91988a" },
+  continueCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 20,
+    padding: 22,
+    borderRadius: 22,
+    backgroundColor: "#2c5542",
+    overflow: "hidden",
+  },
+  continueEyebrow: {
+    fontSize: 8,
+    letterSpacing: 1.3,
+    fontWeight: "600",
+    color: "#b9cbb1",
+  },
+  continueTitle: {
+    fontSize: 22,
+    lineHeight: 28,
+    fontWeight: "600",
+    letterSpacing: -0.6,
+    color: "#fffaf0",
+  },
+  continueAction: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+    marginTop: 8,
+    minHeight: 32,
+  },
+  continueActionText: { color: "#fff", fontSize: 11, fontWeight: "600" },
+  miniBook: {
+    width: 85,
+    height: 130,
+    borderRadius: 5,
+    padding: 12,
+    backgroundColor: "#e3c491",
+    justifyContent: "space-between",
+    transform: [{ rotate: "10deg" }],
+    boxShadow: "-5px 7px 0px #18372955",
+  },
+  miniBookTop: {
+    fontSize: 6,
+    fontWeight: "700",
+    letterSpacing: 1,
+    color: "#3b5a3d",
+  },
+  miniBookBottom: { fontSize: 13, fontWeight: "800", color: "#3b5a3d" },
+  momentum: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+    paddingVertical: 15,
+  },
+  momentumText: { flex: 1, color: "#7a806b", fontSize: 11 },
+  quickActions: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    paddingVertical: 8,
+    marginBottom: 10,
+  },
+  quickAction: { alignItems: "center", gap: 9, flex: 1 },
+  quickIcon: {
+    width: 49,
+    height: 49,
+    borderRadius: 17,
+    backgroundColor: "#edf0e5",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  quickLabel: {
+    fontSize: 10,
+    fontWeight: "500",
+    color: "#56694f",
+    textAlign: "center",
+  },
+  bookShelf: { gap: 16, paddingBottom: 8 },
+  bookmarkButton: {
+    minWidth: 44,
+    minHeight: 44,
+    alignItems: "flex-end",
+    justifyContent: "center",
+  },
+  languageRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 13,
+    backgroundColor: "#fff",
+    borderWidth: 1,
+    borderColor: "#e6eadf",
+    borderRadius: 16,
+    padding: 15,
+    marginBottom: 10,
+  },
+  flagTile: {
+    width: 48,
+    height: 48,
+    borderRadius: 16,
+    backgroundColor: "#f4f4ed",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  accountMenu: {
+    borderWidth: 1,
+    borderColor: "#e6eadf",
+    borderRadius: 16,
+    paddingHorizontal: 16,
+    backgroundColor: "#fff",
+    marginBottom: 18,
+  },
+  accountMenuRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    minHeight: 60,
+  },
+  accountMenuLabel: { flex: 1, fontSize: 14, color: "#40583e" },
+  demoFootnote: {
+    fontSize: 10,
+    color: "#909580",
+    textAlign: "center",
+    marginTop: 22,
+  },
+  inlineNotice: {
+    backgroundColor: "#eaf0e3",
+    color: "#36593c",
+    padding: 14,
+    borderRadius: 10,
+    lineHeight: 22,
   },
   modalContent: {
     padding: 28,

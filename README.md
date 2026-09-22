@@ -1,6 +1,6 @@
 # Education Forum
 
-Education-first Expo / React Native application for iOS, Android, and web. Forest green, warm ivory, and sage visual identity. The supplied specification is preserved in [docs/product-specification.md](docs/product-specification.md).
+Education-first native iOS and Android app built with Expo / React Native, with an optional browser preview. Five fixed phone tabs, compact screens, native sheets, safe areas, haptics, and a forest-green visual identity. The supplied specification is preserved in [docs/product-specification.md](docs/product-specification.md).
 
 **Status: functional development preview with a backend migration, not a production-complete release.** The implementation does not process real money. See [release readiness](docs/RELEASE_READINESS.md) for explicit gaps.
 
@@ -10,11 +10,10 @@ Requires Node 22+ and npm.
 
 ```sh
 npm ci
-npm run web
-# Or use a device / simulator
-npm start
-npm run ios
-npm run android
+npm run ios      # Compile and install on an iOS simulator
+npm run android  # Compile and install on Android
+npm start        # Metro for an installed development build
+npm run web      # Optional browser preview
 ```
 
 With no environment variables, the app runs in clearly labelled preview mode. Sample books are original short educational excerpts, not licensed full textbooks. Bookmarks, submissions, moderation decisions and introductory language progress persist locally. Open Account → Explore admin preview to test moderation and configuration. Demo admin access never grants backend privileges.
@@ -49,7 +48,9 @@ All user submissions start `pending`. Only an audited administrator RPC can publ
 
 ## Native builds
 
-`app.json` and `eas.json` include development, preview, and production build profiles. Before building, choose your final bundle identifiers, configure an EAS project and signing credentials, create original app icons and splash assets, and add actual store metadata. A development build requires installing `expo-dev-client` first. Store submission is not configured or performed by this repository.
+See [PHONE_APP.md](docs/PHONE_APP.md) for installable APK and iPhone build instructions.
+
+`app.json` and `eas.json` include development, preview, and production build profiles. Before building, choose your final bundle identifiers, configure an EAS project and signing credentials, review the supplied original icons and splash assets, and add actual store metadata. The native development client, splash screen, safe-area and haptics modules are included. Store submission is not configured or performed by this repository.
 
 ```sh
 npx eas-cli build --profile preview --platform android
