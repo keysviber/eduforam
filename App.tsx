@@ -24,7 +24,14 @@ import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as DocumentPicker from "expo-document-picker";
 import { File } from "expo-file-system";
+import { validateAccountForm } from "./src/account-validation";
+import { Languages } from "./src/Languages";
+import { GradePicker, SchoolFeatures } from "./src/SchoolFeatures";
+import { LessonVideo } from "./src/LessonVideo";
+import { grades, matchesHomeGrade } from "./src/discovery";
 import { backend } from "./src/backend";
+import { coreEducationRelease, isCorePage } from "./src/release";
+import { parseAuthLink } from "./src/auth-links";
 import { Management, Plans } from "./src/Management";
 import {
   Entry,
@@ -77,7 +84,7 @@ const tabs: {
   },
 ];
 const parentTab = (page: string) =>
-  page === "Languages"
+  ["Languages", "Community", "Classrooms", "Safe Room"].includes(page)
     ? "Learning"
     : ["Premier", "Earnings", "Community", "Admin"].includes(page)
       ? "Account"
@@ -127,15 +134,24 @@ export default function App() {
   );
 }
 function AppContent() {
+  const [languageStart, setLanguageStart] = useState("French");
+  const [editingGrade, setEditingGrade] = useState(false);
+  const [grade, setGrade] = useState<string | null>(null);
+  const [signupGrade, setSignupGrade] = useState<string | null>(null);
+  const [submissionGrade, setSubmissionGrade] = useState<string | null>(null);
+  const [videoSearch, setVideoSearch] = useState("");
+  const [recovery, setRecovery] = useState(false);
+  const authRedirect =
+    Platform.OS === "web" ? undefined : "educationforum://auth/callback";
   const insets = useSafeAreaInsets();
   const scrollRef = useRef<ScrollView>(null);
+  const authGeneration = useRef(0);
   const [routeHistory, setRouteHistory] = useState<string[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [lastRead, setLastRead] = useState<string | null>(null);
   const [page, setPage] = useState("Overview"),
     [entries, setEntries] = useState<Entry[]>(backend ? [] : initialEntries),
     [saved, setSaved] = useState<string[]>([]),
-    [progress, setProgress] = useState<Record<string, number>>({}),
     [history, setHistory] = useState<Decision[]>([]),
     [ready, setReady] = useState(false),
     [busy, setBusy] = useState(false),
@@ -158,11 +174,33 @@ function AppContent() {
   const [auth, setAuth] = useState(false),
     [email, setEmail] = useState(""),
     [password, setPassword] = useState(""),
+    [confirmation, setConfirmation] = useState(""),
     [signup, setSignup] = useState(false),
-    [lesson, setLesson] = useState<(typeof languages)[number] | null>(null),
-    [answer, setAnswer] = useState(""),
     [reviewReason, setReviewReason] = useState("");
   const admin = backend ? ["admin", "owner"].includes(role) : demoAdmin;
+  function openAccount(create: boolean) {
+    setSignup(create);
+    setRecovery(false);
+    setNotice("");
+    setPassword("");
+    setConfirmation("");
+    setAuth(true);
+  }
+  function AccountActions() {
+    return (
+      <View
+        style={{
+          flexDirection: "row",
+          flexWrap: "wrap",
+          gap: 10,
+          marginBottom: 16,
+        }}
+      >
+        <Button label="Create account" onPress={() => openAccount(true)} />
+        <Button secondary label="Log in" onPress={() => openAccount(false)} />
+      </View>
+    );
+  }
   async function run(fn: () => Promise<void>) {
     setBusy(true);
     try {
@@ -179,12 +217,13 @@ function AppContent() {
   }
   async function refresh() {
     if (!backend) return;
+    const generation = authGeneration.current;
     const { data, error } = await backend
       .from("entries")
       .select("*")
       .order("created_at", { ascending: false });
     if (error) throw error;
-    setEntries(data || []);
+    if (generation === authGeneration.current) setEntries(data || []);
   }
   useEffect(() => {
     let active = true;
@@ -196,8 +235,8 @@ function AppContent() {
             const v = JSON.parse(raw);
             setEntries(v.entries || initialEntries);
             setSaved(v.saved || []);
-            setProgress(v.progress || {});
             setHistory(v.history || []);
+            setGrade(v.grade || null);
           }
         } else {
           await refresh();
@@ -208,25 +247,46 @@ function AppContent() {
         if (active) setReady(true);
       }
     })();
-    if (backend)
-      void backend.auth.getSession().then(({ data }) => {
-        if (active) setUser(data.session?.user ?? null);
-      });
     const sub = backend?.auth.onAuthStateChange((_event, session) => {
+      const generation = ++authGeneration.current;
+      if (_event === "PASSWORD_RECOVERY") {
+        setRecovery(true);
+        setPassword("");
+        setAuth(true);
+      }
       setUser(session?.user ?? null);
       setRole("student");
-      if (session)
-        setTimeout(() => {
+      setGrade(null);
+      if (!session) {
+        setRecovery(false);
+        setPassword("");
+        setReader(null);
+        setEntries((items) =>
+          items.filter((item) => item.status === "approved"),
+        );
+      }
+      setTimeout(() => {
+        if (!active || generation !== authGeneration.current) return;
+        if (session)
           backend
             ?.from("profiles")
-            .select("role")
+            .select("role,grade")
             .eq("id", session.user.id)
             .single()
-            .then(({ data }) => {
-              if (active) setRole(data?.role || "student");
+            .then(({ data, error }) => {
+              if (error && active && generation === authGeneration.current)
+                setNotice(
+                  "Could not load your grade. Refresh or choose your grade below.",
+                );
+              if (active && generation === authGeneration.current) {
+                setRole(data?.role || "student");
+                setGrade(data?.grade || null);
+              }
             });
-          void refresh();
-        }, 0);
+        void refresh().catch(() =>
+          setNotice("Could not refresh your data. Please retry."),
+        );
+      }, 0);
     });
     return () => {
       active = false;
@@ -234,19 +294,75 @@ function AppContent() {
     };
   }, []);
   useEffect(() => {
+    if (!backend) return;
+    let active = true;
+    setSaved([]);
+    if (user) {
+      void backend
+        .from("bookmarks")
+        .select("entry_id")
+        .eq("user_id", user.id)
+        .then(({ data, error }) => {
+          if (!active) return;
+          if (error)
+            setNotice("Could not load your saved books. Please try again.");
+          else setSaved((data || []).map((item) => item.entry_id));
+        });
+    }
+    return () => {
+      active = false;
+    };
+  }, [user?.id]);
+  useEffect(() => {
+    if (!backend || Platform.OS === "web") return;
+    let active = true;
+    const handle = async (url: string) => {
+      try {
+        const credentials = parseAuthLink(url);
+        if (!credentials) return;
+        const { error } = await backend!.auth.setSession(credentials);
+        if (error) throw error;
+        if (active && credentials.recovery) {
+          setRecovery(true);
+          setPassword("");
+          setAuth(true);
+        }
+      } catch {
+        if (active)
+          setNotice(
+            "Unable to open the authentication link. Request a new email and try again.",
+          );
+      }
+    };
+    const listener = Linking.addEventListener("url", ({ url }) => {
+      void handle(url);
+    });
+    void Linking.getInitialURL()
+      .then((url) => {
+        if (url && active) void handle(url);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+      listener.remove();
+    };
+  }, []);
+  useEffect(() => {
     if (ready && !backend)
       void AsyncStorage.setItem(
         "education-forum-demo-v1",
-        JSON.stringify({ entries, saved, progress, history }),
+        JSON.stringify({ entries, saved, history, grade }),
       ).catch(() => setNotice("Your device could not save these changes."));
-  }, [entries, saved, progress, history, ready]);
+  }, [entries, saved, history, grade, ready]);
   function go(p: string, root = false) {
+    if (coreEducationRelease && !isCorePage(p)) return;
     tactile();
     setRouteHistory((v) => (root ? [] : p === page ? v : [...v, page]));
     setPage(p);
     setNotice("");
     setSearch("");
     setCategory("All subjects");
+    setLevel("All levels");
     scrollRef.current?.scrollTo({ y: 0, animated: false });
   }
   const goBack = useCallback(() => {
@@ -295,10 +411,13 @@ function AppContent() {
     }
   }
   function openForm(kind: Kind) {
+    if (coreEducationRelease && !["book", "course", "reel"].includes(kind))
+      return;
     if (backend && !user) {
       setAuth(true);
       return;
     }
+    setSubmissionGrade(grade);
     setForm(kind);
     setTitle("");
     setDescription("");
@@ -308,8 +427,22 @@ function AppContent() {
   async function submit() {
     await run(async () => {
       validateSubmission(title, description);
-      if (form === "book" && !attachment)
-        throw new Error("Attach a PDF before submitting your book.");
+      if ((form === "book" || form === "reel") && !attachment)
+        throw new Error(
+          form === "reel"
+            ? "Attach a video before submitting."
+            : "Attach a PDF before submitting your book.",
+        );
+      if (!submissionGrade)
+        throw new Error("Choose the grade for this resource.");
+      if (attachment && (attachment.size || 0) > 20 * 1024 * 1024)
+        throw new Error("Choose a file smaller than 20 MB.");
+      if (
+        form === "reel" &&
+        attachment &&
+        !["video/mp4", "video/quicktime"].includes(attachment.mimeType || "")
+      )
+        throw new Error("Choose an MP4 or QuickTime video.");
       const id =
         globalThis.crypto?.randomUUID?.() ||
         "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
@@ -340,7 +473,7 @@ function AppContent() {
         description: description.trim(),
         category: subject,
         author: author.trim() || "Community member",
-        level: "All levels",
+        level: submissionGrade,
         status: "pending",
         created_at: new Date().toISOString(),
         target: 0,
@@ -390,14 +523,22 @@ function AppContent() {
       setNotice(`Submission ${status.replace("_", " ")}.`);
     });
   }
-  const publicEntries = entries.filter((e) => canPublish(e.status));
+  const publicEntries = entries.filter(
+    (e) =>
+      canPublish(e.status) &&
+      (!coreEducationRelease || ["book", "course", "reel"].includes(e.kind)),
+  );
+  const homeEntries = publicEntries.filter((e) =>
+    matchesHomeGrade(e.level, grade),
+  );
+  const homeBooks = homeEntries.filter((e) => e.kind === "book");
   const books = publicEntries
     .filter(
       (e) =>
         e.kind === "book" &&
         (category === "All subjects" || e.category === category) &&
         (level === "All levels" || e.level === level) &&
-        `${e.title} ${e.author} ${e.category}`
+        `${e.title} ${e.author} ${e.category} ${e.level}`
           .toLowerCase()
           .includes(search.toLowerCase()),
     )
@@ -432,19 +573,6 @@ function AppContent() {
       setSaved((v) => (removing ? v.filter((x) => x !== id) : [...v, id]));
     });
   }
-  useEffect(() => {
-    if (!backend) return;
-    setSaved([]);
-    if (user)
-      void backend
-        .from("bookmarks")
-        .select("entry_id")
-        .eq("user_id", user.id)
-        .then(({ data, error }) => {
-          if (error) setNotice(error.message);
-          else setSaved((data || []).map((x) => x.entry_id));
-        });
-  }, [user?.id]);
   function Heading({
     eyebrow,
     title: heading,
@@ -623,6 +751,7 @@ function AppContent() {
                     </View>
                   )}
                 </View>
+                {!user && <AccountActions />}
                 <Pressable
                   accessibilityRole="button"
                   accessibilityLabel="Search the library"
@@ -635,62 +764,23 @@ function AppContent() {
                   </Text>
                   <Icon name="options-outline" size={18} />
                 </Pressable>
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel={
-                    publicEntries.some((e) => e.id === lastRead)
-                      ? "Continue reading"
-                      : "Explore the library"
-                  }
-                  style={s.continueCard}
-                  onPress={() => {
-                    const book = publicEntries.find((e) => e.id === lastRead);
-                    if (book) setReader(book);
-                    else go("Library", true);
-                  }}
-                >
-                  <View style={{ flex: 1, gap: 9 }}>
-                    <Text style={s.continueEyebrow}>
-                      {publicEntries.some((e) => e.id === lastRead)
-                        ? "PICK UP WHERE YOU LEFT OFF"
-                        : "YOUR NEXT CHAPTER"}
-                    </Text>
-                    <Text numberOfLines={3} style={s.continueTitle}>
-                      {publicEntries.find((e) => e.id === lastRead)?.title ||
-                        "Big ideas start with a little curiosity."}
-                    </Text>
-                    <View style={s.continueAction}>
-                      <Text style={s.continueActionText}>
-                        {publicEntries.some((e) => e.id === lastRead)
-                          ? "Continue reading"
-                          : "Find your next read"}
-                      </Text>
-                      <Icon name="arrow-forward" size={17} color="#fff" />
-                    </View>
-                  </View>
-                  <View style={s.miniBook}>
-                    <Text style={s.miniBookTop}>EDUCATION FORUM</Text>
-                    <Icon name="leaf-outline" size={40} color="#3b5a3d" />
-                    <Text style={s.miniBookBottom}>STAY CURIOUS.</Text>
-                  </View>
-                </Pressable>
-                <View style={s.momentum}>
-                  <Icon name="sparkles-outline" size={19} color="#8e7839" />
-                  <Text style={s.momentumText}>
-                    {Object.keys(progress).length
-                      ? `${Object.keys(progress).length} introductory lessons completed`
-                      : "Make a little time for a new idea."}
-                  </Text>
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel="Open learning"
-                    onPress={() => go("Learning", true)}
-                  >
-                    <Icon name="chevron-forward" size={18} />
-                  </Pressable>
-                </View>
                 <View style={s.quickActions}>
                   {[
+                    {
+                      name: "Community",
+                      icon: "videocam-outline",
+                      label: "Video lessons",
+                    },
+                    {
+                      name: "Classrooms",
+                      icon: "people-outline",
+                      label: "Join classroom",
+                    },
+                    {
+                      name: "Safe Room",
+                      icon: "shield-checkmark-outline",
+                      label: "Safe Room",
+                    },
                     {
                       name: "Languages",
                       icon: "globe-outline",
@@ -711,20 +801,139 @@ function AppContent() {
                       icon: "sparkles-outline",
                       label: "Premier",
                     },
-                  ].map((x) => (
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel={x.label}
-                      key={x.name}
-                      onPress={() => go(x.name)}
-                      style={s.quickAction}
-                    >
-                      <View style={s.quickIcon}>
-                        <Icon name={x.icon as IconName} size={23} />
-                      </View>
-                      <Text style={s.quickLabel}>{x.label}</Text>
-                    </Pressable>
-                  ))}
+                  ]
+                    .filter((x) => !coreEducationRelease || isCorePage(x.name))
+                    .map((x) => (
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel={x.label}
+                        key={x.name}
+                        onPress={() => go(x.name)}
+                        style={s.quickAction}
+                      >
+                        <View style={s.quickIcon}>
+                          <Icon name={x.icon as IconName} size={23} />
+                        </View>
+                        <Text style={s.quickLabel}>{x.label}</Text>
+                      </Pressable>
+                    ))}
+                </View>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={
+                    homeEntries.some((e) => e.id === lastRead)
+                      ? "Continue reading"
+                      : "Explore the library"
+                  }
+                  style={s.continueCard}
+                  onPress={() => {
+                    const book = homeEntries.find((e) => e.id === lastRead);
+                    if (book) setReader(book);
+                    else go("Library", true);
+                  }}
+                >
+                  <View style={{ flex: 1, gap: 9 }}>
+                    <Text style={s.continueEyebrow}>
+                      {homeEntries.some((e) => e.id === lastRead)
+                        ? "PICK UP WHERE YOU LEFT OFF"
+                        : "YOUR NEXT CHAPTER"}
+                    </Text>
+                    <Text numberOfLines={3} style={s.continueTitle}>
+                      {homeEntries.find((e) => e.id === lastRead)?.title ||
+                        "Big ideas start with a little curiosity."}
+                    </Text>
+                    <View style={s.continueAction}>
+                      <Text style={s.continueActionText}>
+                        {homeEntries.some((e) => e.id === lastRead)
+                          ? "Continue reading"
+                          : "Find your next read"}
+                      </Text>
+                      <Icon name="arrow-forward" size={17} color="#fff" />
+                    </View>
+                  </View>
+                  <View style={s.miniBook}>
+                    <Text style={s.miniBookTop}>EDUCATION FORUM</Text>
+                    <Icon name="leaf-outline" size={40} color="#3b5a3d" />
+                    <Text style={s.miniBookBottom}>STAY CURIOUS.</Text>
+                  </View>
+                </Pressable>
+                <View style={s.momentum}>
+                  <Icon name="sparkles-outline" size={19} color="#8e7839" />
+                  <Text style={s.momentumText}>
+                    {"Make a little time for a new idea."}
+                  </Text>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Open learning"
+                    onPress={() => go("Learning", true)}
+                  >
+                    <Icon name="chevron-forward" size={18} />
+                  </Pressable>
+                </View>
+                <View style={s.card}>
+                  <Text style={s.cardTitle}>
+                    {grade ? "Your home - " + grade : "Choose your grade"}
+                  </Text>
+                  <Text style={s.muted}>
+                    Home shows your grade, one below and one above. Search the
+                    library or videos to explore other grades.
+                  </Text>
+                  {grade && (!backend || user) && (
+                    <Button
+                      secondary
+                      label={
+                        editingGrade ? "Cancel grade change" : "Change grade"
+                      }
+                      onPress={() => setEditingGrade((v) => !v)}
+                    />
+                  )}
+                  {(!backend || user) && (!grade || editingGrade) && (
+                    <GradePicker
+                      value={grade}
+                      onChange={(g) => {
+                        if (!backend) {
+                          setGrade(g);
+                          setEditingGrade(false);
+                          return;
+                        }
+                        if (busy) return;
+                        const generation = authGeneration.current;
+                        void run(async () => {
+                          const { error } = await backend!.rpc("set_my_grade", {
+                            new_grade: g,
+                          });
+                          if (error) throw error;
+                          if (generation === authGeneration.current) {
+                            setGrade(g);
+                            setEditingGrade(false);
+                          }
+                        });
+                      }}
+                    />
+                  )}
+                </View>
+                <View style={s.card}>
+                  <Text style={s.sectionHeading}>Video lessons</Text>
+                  <Text style={s.muted}>
+                    Watch approved lessons for your grade and nearby grades.
+                  </Text>
+                  {homeEntries
+                    .filter((e) => e.kind === "reel")
+                    .slice(0, 3)
+                    .map((e) => (
+                      <EntryCard key={e.id} entry={e} />
+                    ))}
+                  {!homeEntries.some((e) => e.kind === "reel") && (
+                    <Text style={s.small}>
+                      {grade
+                        ? "No approved videos for your grade yet."
+                        : "Choose your grade to see recommended videos."}
+                    </Text>
+                  )}
+                  <Button
+                    label="Search all video lessons"
+                    onPress={() => go("Community")}
+                  />
                 </View>
                 <View style={s.sectionTitle}>
                   <Text style={s.sectionHeading}>Your next great read</Text>
@@ -742,7 +951,7 @@ function AppContent() {
                   showsHorizontalScrollIndicator={false}
                   contentContainerStyle={s.bookShelf}
                 >
-                  {books.slice(0, 6).map((book) => (
+                  {homeBooks.slice(0, 6).map((book) => (
                     <BookCard key={book.id} book={book} shelf />
                   ))}
                 </ScrollView>
@@ -758,8 +967,8 @@ function AppContent() {
                     key={l.name}
                     style={s.languageRow}
                     onPress={() => {
-                      setLesson(l);
-                      setAnswer("");
+                      setLanguageStart(l.name);
+                      go("Languages");
                     }}
                   >
                     <View style={s.flagTile}>
@@ -768,19 +977,10 @@ function AppContent() {
                     <View style={{ flex: 1 }}>
                       <Text style={s.cardTitle}>{l.name}</Text>
                       <Text style={s.small}>
-                        {progress[l.name]
-                          ? "Introductory lesson complete"
-                          : "Beginner · Start with a hello"}
+                        Beginner: four categories, starting with greetings
                       </Text>
                     </View>
-                    <Icon
-                      name={
-                        progress[l.name]
-                          ? "checkmark-circle"
-                          : "chevron-forward"
-                      }
-                      color="#628158"
-                    />
+                    <Icon name="chevron-forward" color="#628158" />
                   </Pressable>
                 ))}
                 {!backend && (
@@ -843,15 +1043,17 @@ function AppContent() {
                     },
                   ]}
                 >
-                  {["All levels", "Beginner", "Secondary", "University"].map(
-                    (l) => (
-                      <Pressable key={l} onPress={() => setLevel(l)}>
-                        <Text style={[s.small, level === l && s.link]}>
-                          {l}{" "}
-                        </Text>
-                      </Pressable>
-                    ),
-                  )}
+                  {[
+                    "All levels",
+                    ...grades,
+                    "Beginner",
+                    "Secondary",
+                    "University",
+                  ].map((l) => (
+                    <Pressable key={l} onPress={() => setLevel(l)}>
+                      <Text style={[s.small, level === l && s.link]}>{l} </Text>
+                    </Pressable>
+                  ))}
                   <Pressable
                     onPress={() =>
                       setSort((v) => (v === "Newest" ? "Title A–Z" : "Newest"))
@@ -904,8 +1106,8 @@ function AppContent() {
                 <View style={s.card}>
                   <Text style={s.cardTitle}>Teachers & tutors</Text>
                   <Text style={s.muted}>
-                    Share your expertise. Verified educators can submit lessons
-                    for review.
+                    Share your expertise. Submit educational lessons for
+                    administrator review.
                   </Text>
                   <Button
                     label="Submit a lesson"
@@ -915,42 +1117,22 @@ function AppContent() {
               </>
             )}
             {page === "Languages" && (
-              <>
-                <Heading
-                  eyebrow="HELLO, WORLD"
-                  title="Learn a language"
-                  subtitle="Start your journey in French, Dutch, or Spanish."
-                />
-                {languages.map((l) => (
-                  <View key={l.name} style={s.card}>
-                    <View style={s.row}>
-                      <Text style={{ fontSize: 36 }}>{l.flag}</Text>
-                      <Text style={s.tag}>Beginner · Vocabulary</Text>
-                    </View>
-                    <Text style={s.sectionHeading}>{l.name}</Text>
-                    <Text style={s.muted}>
-                      Greetings, everyday words, and a quick knowledge check.
-                    </Text>
-                    <View style={s.track}>
-                      <View
-                        style={[s.fill, { width: `${progress[l.name] || 0}%` }]}
-                      />
-                    </View>
-                    <Text style={s.small}>
-                      {progress[l.name] || 0}% complete
-                    </Text>
-                    <Button
-                      label={
-                        progress[l.name] ? "Review lesson" : "Begin lesson →"
-                      }
-                      onPress={() => {
-                        setLesson(l);
-                        setAnswer("");
-                      }}
-                    />
-                  </View>
-                ))}
-              </>
+              <Languages
+                key={user?.id || "guest"}
+                userId={user?.id}
+                initialLanguage={languageStart}
+              />
+            )}
+            {["Classrooms", "Safe Room"].includes(page) && (
+              <SchoolFeatures
+                key={`${page}:${user?.id || "guest"}`}
+                page={page}
+                userId={user?.id}
+                admin={admin}
+                entries={publicEntries}
+                openEntry={setReader}
+                signIn={() => setAuth(true)}
+              />
             )}
             {page === "Opportunities" && (
               <>
@@ -999,25 +1181,40 @@ function AppContent() {
               <>
                 <Heading
                   eyebrow="A LITTLE INSPIRATION"
-                  title="Student moments"
-                  subtitle="Short educational moments. Then, back to your next chapter."
+                  title="Video lessons"
+                  subtitle="Search approved lessons across all grades, subjects and titles."
                   action={
                     <Button
-                      label="Submit a reel"
+                      label="Submit a video lesson"
                       onPress={() => openForm("reel")}
                     />
                   }
                 />
                 <View style={s.card}>
                   <Icon name="videocam-outline" size={35} />
-                  <Text style={s.cardTitle}>Space for student stories</Text>
+                  <Text style={s.cardTitle}>Learn by watching</Text>
+                  <TextInput
+                    accessibilityLabel="Search video lessons"
+                    placeholder="Search title, subject or grade"
+                    style={s.input}
+                    value={videoSearch}
+                    onChangeText={setVideoSearch}
+                  />
                   <Text style={s.muted}>
                     Approved student videos appear here. Keep it educational,
                     respectful, and short.
                   </Text>
                 </View>
                 {publicEntries
-                  .filter((e) => e.kind === "reel")
+                  .filter(
+                    (e) =>
+                      e.kind === "reel" &&
+                      (videoSearch.trim()
+                        ? `${e.title} ${e.category} ${e.level}`
+                            .toLowerCase()
+                            .includes(videoSearch.toLowerCase().trim())
+                        : matchesHomeGrade(e.level, grade)),
+                  )
                   .map((e) => (
                     <EntryCard key={e.id} entry={e} />
                   ))}
@@ -1110,34 +1307,41 @@ function AppContent() {
                     {
                       name: "Community",
                       icon: "play-circle-outline",
-                      label: "Student moments",
+                      label: "Video lessons",
                     },
-                  ].map((item) => (
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel={item.label}
-                      key={item.name}
-                      onPress={() => go(item.name)}
-                      style={s.accountMenuRow}
-                    >
-                      <Icon name={item.icon as IconName} />
-                      <Text style={s.accountMenuLabel}>{item.label}</Text>
-                      <Icon name="chevron-forward" size={18} />
-                    </Pressable>
-                  ))}
+                  ]
+                    .filter(
+                      (item) => !coreEducationRelease || isCorePage(item.name),
+                    )
+                    .map((item) => (
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel={item.label}
+                        key={item.name}
+                        onPress={() => go(item.name)}
+                        style={s.accountMenuRow}
+                      >
+                        <Icon name={item.icon as IconName} />
+                        <Text style={s.accountMenuLabel}>{item.label}</Text>
+                        <Icon name="chevron-forward" size={18} />
+                      </Pressable>
+                    ))}
                 </View>
+                {!user && <AccountActions />}
                 {backend ? (
-                  <Button
-                    label={user ? "Sign out" : "Sign in / Create account"}
-                    onPress={() =>
-                      user
-                        ? void run(async () => {
-                            const { error } = await backend!.auth.signOut();
-                            if (error) throw error;
-                          })
-                        : setAuth(true)
-                    }
-                  />
+                  user && (
+                    <Button
+                      label="Sign out"
+                      onPress={() =>
+                        user
+                          ? void run(async () => {
+                              const { error } = await backend!.auth.signOut();
+                              if (error) throw error;
+                            })
+                          : setAuth(true)
+                      }
+                    />
+                  )
                 ) : (
                   <View style={s.card}>
                     <Text style={s.cardTitle}>Preview mode</Text>
@@ -1166,6 +1370,37 @@ function AppContent() {
                   />
                 )}
                 <Text style={s.sectionHeading}>My submissions</Text>
+                {[
+                  {
+                    label: "Privacy policy",
+                    url: process.env.EXPO_PUBLIC_PRIVACY_URL,
+                  },
+                  {
+                    label: "Terms of use",
+                    url: process.env.EXPO_PUBLIC_TERMS_URL,
+                  },
+                  {
+                    label: "Contact support",
+                    url: process.env.EXPO_PUBLIC_SUPPORT_URL,
+                  },
+                  {
+                    label: "Request account deletion",
+                    url: process.env.EXPO_PUBLIC_ACCOUNT_DELETION_URL,
+                  },
+                ]
+                  .filter((item) => !!item.url)
+                  .map((item) => (
+                    <Button
+                      key={item.label}
+                      secondary
+                      label={item.label}
+                      onPress={() =>
+                        void run(async () => {
+                          await Linking.openURL(item.url!);
+                        })
+                      }
+                    />
+                  ))}
                 {entries
                   .filter(
                     (e) =>
@@ -1282,15 +1517,17 @@ function AppContent() {
                     {new Date(h.created_at).toLocaleString()}
                   </Text>
                 ))}
-                <View style={s.card}>
-                  <Text style={s.cardTitle}>Financial configuration</Text>
-                  <Text style={s.muted}>
-                    The database includes protected plans, feature rules,
-                    earnings policies, transactions, and funding agreements.
-                    Provider integrations, verified activity processing, and
-                    financial disbursement workflows remain to be implemented.
-                  </Text>
-                </View>
+                {!coreEducationRelease && (
+                  <View style={s.card}>
+                    <Text style={s.cardTitle}>Financial configuration</Text>
+                    <Text style={s.muted}>
+                      The database includes protected plans, feature rules,
+                      earnings policies, transactions, and funding agreements.
+                      Provider integrations, verified activity processing, and
+                      financial disbursement workflows remain to be implemented.
+                    </Text>
+                  </View>
+                )}
               </>
             )}
           </ScrollView>
@@ -1298,31 +1535,33 @@ function AppContent() {
             accessibilityRole="tablist"
             style={[s.bottomNav, { paddingBottom: Math.max(insets.bottom, 8) }]}
           >
-            {tabs.map((tab) => {
-              const selected = parentTab(page) === tab.name;
-              return (
-                <Pressable
-                  accessibilityRole="tab"
-                  accessibilityLabel={tab.label}
-                  accessibilityState={{ selected }}
-                  aria-selected={selected}
-                  key={tab.name}
-                  onPress={() => go(tab.name, true)}
-                  style={s.mobileNav}
-                >
-                  <View style={[s.tabIcon, selected && s.tabIconActive]}>
-                    <Icon
-                      name={selected ? tab.selectedIcon : tab.icon}
-                      color={selected ? "#28513e" : "#89938a"}
-                      size={22}
-                    />
-                  </View>
-                  <Text style={[s.tabLabel, selected && s.tabLabelActive]}>
-                    {tab.label}
-                  </Text>
-                </Pressable>
-              );
-            })}
+            {tabs
+              .filter((tab) => !coreEducationRelease || isCorePage(tab.name))
+              .map((tab) => {
+                const selected = parentTab(page) === tab.name;
+                return (
+                  <Pressable
+                    accessibilityRole="tab"
+                    accessibilityLabel={tab.label}
+                    accessibilityState={{ selected }}
+                    aria-selected={selected}
+                    key={tab.name}
+                    onPress={() => go(tab.name, true)}
+                    style={s.mobileNav}
+                  >
+                    <View style={[s.tabIcon, selected && s.tabIconActive]}>
+                      <Icon
+                        name={selected ? tab.selectedIcon : tab.icon}
+                        color={selected ? "#28513e" : "#89938a"}
+                        size={22}
+                      />
+                    </View>
+                    <Text style={[s.tabLabel, selected && s.tabLabelActive]}>
+                      {tab.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
           </View>
         </View>
       </View>
@@ -1355,7 +1594,10 @@ function AppContent() {
                 <Text style={s.heading}>{reader.title}</Text>
                 <Text style={s.muted}>By {reader.author}</Text>
                 <Text style={s.reading}>{reader.description}</Text>
-                {reader.file_path && (
+                {reader.kind === "reel" && reader.file_path && (
+                  <LessonVideo path={reader.file_path} userId={user?.id} />
+                )}
+                {reader.file_path && reader.kind !== "reel" && (
                   <Button
                     label="Open attached file"
                     onPress={() =>
@@ -1455,6 +1697,11 @@ function AppContent() {
               before publication. Keep sensitive personal information out of the
               public description.
             </Text>
+            <Text style={s.label}>Resource grade</Text>
+            <GradePicker
+              value={submissionGrade}
+              onChange={setSubmissionGrade}
+            />
             {[
               { label: "Title", value: title, set: setTitle },
               {
@@ -1491,12 +1738,17 @@ function AppContent() {
               label={
                 attachment
                   ? `Attached: ${attachment.name}`
-                  : "Attach a document or video"
+                  : form === "reel"
+                    ? "Attach a video"
+                    : "Attach a PDF"
               }
               onPress={() =>
                 void run(async () => {
                   const r = await DocumentPicker.getDocumentAsync({
-                    type: form === "reel" ? "video/*" : "application/pdf",
+                    type:
+                      form === "reel"
+                        ? ["video/mp4", "video/quicktime"]
+                        : "application/pdf",
                     copyToCacheDirectory: true,
                   });
                   if (!r.canceled) {
@@ -1536,8 +1788,18 @@ function AppContent() {
             )}
             <Button secondary label="← Back" onPress={() => setAuth(false)} />
             <Text style={s.heading}>
-              {signup ? "Your next chapter starts here." : "Welcome back."}
+              {recovery
+                ? "Choose a new password"
+                : signup
+                  ? "Create your account"
+                  : "Welcome back."}
             </Text>
+            {!backend && (
+              <Text style={s.inlineNotice}>
+                Account registration and login are not available in this
+                preview. You can still explore learning and the library.
+              </Text>
+            )}
             <TextInput
               style={s.input}
               placeholder="Email address"
@@ -1555,110 +1817,131 @@ function AppContent() {
               value={password}
               onChangeText={setPassword}
             />
+            {signup && !recovery && (
+              <TextInput
+                accessibilityLabel="Confirm password"
+                placeholder="Confirm password"
+                style={s.input}
+                secureTextEntry
+                value={confirmation}
+                onChangeText={setConfirmation}
+              />
+            )}
+            {signup && !recovery && (
+              <View style={{ gap: 12 }}>
+                <Text style={s.label}>Your grade</Text>
+                <GradePicker value={signupGrade} onChange={setSignupGrade} />
+              </View>
+            )}
             <Button
-              label={signup ? "Create account" : "Sign in"}
+              label={
+                busy
+                  ? "Please wait…"
+                  : recovery
+                    ? "Update password"
+                    : signup
+                      ? "Create account"
+                      : "Sign in"
+              }
               onPress={() => {
                 if (!busy)
                   void run(async () => {
-                    if (password.length < 8)
+                    if (recovery && password.length < 8)
                       throw new Error(
                         "Use at least 8 characters for your password.",
                       );
-                    const { error } = signup
-                      ? await backend!.auth.signUp({ email, password })
-                      : await backend!.auth.signInWithPassword({
+                    const normalizedEmail = recovery
+                      ? email.trim()
+                      : validateAccountForm({
                           email,
+                          password,
+                          confirmation,
+                          signup,
+                          grade: signupGrade,
+                        });
+                    if (!backend)
+                      throw new Error(
+                        "Account service is not connected yet. No account has been created.",
+                      );
+                    if (recovery) {
+                      const { error } = await backend!.auth.updateUser({
+                        password,
+                      });
+                      if (error) throw error;
+                      setRecovery(false);
+                      setPassword("");
+                      setAuth(false);
+                      setNotice("Your password has been updated.");
+                      return;
+                    }
+                    const { data, error } = signup
+                      ? await backend!.auth.signUp({
+                          email: normalizedEmail,
+                          password,
+                          options: {
+                            emailRedirectTo: authRedirect,
+                            data: { grade: signupGrade },
+                          },
+                        })
+                      : await backend!.auth.signInWithPassword({
+                          email: normalizedEmail,
                           password,
                         });
                     if (error) throw error;
                     setAuth(false);
+                    setPassword("");
                     setNotice(
-                      signup
-                        ? "Check your email to confirm your account."
-                        : "Welcome back.",
+                      signup && !data.session
+                        ? "Check your email to confirm your account, then log in."
+                        : signup
+                          ? "Your account is ready. Welcome!"
+                          : "Welcome back.",
                     );
                   });
               }}
             />
-            <Button
-              secondary
-              label={
-                signup
-                  ? "Already have an account? Sign in"
-                  : "New here? Create an account"
-              }
-              onPress={() => setSignup(!signup)}
-            />
-            <Button
-              secondary
-              label="Send password reset email"
-              onPress={() =>
-                void run(async () => {
-                  const { error } =
-                    await backend!.auth.resetPasswordForEmail(email);
-                  if (error) throw error;
-                  setNotice("Password reset email requested.");
-                })
-              }
-            />
-          </ScrollView>
-        </SafeAreaView>
-      </Modal>
-      <Modal
-        visible={!!lesson}
-        presentationStyle="pageSheet"
-        allowSwipeDismissal
-        animationType="slide"
-        onRequestClose={() => setLesson(null)}
-      >
-        <SafeAreaView style={s.safe}>
-          <ScrollView
-            contentContainerStyle={s.modalContent}
-            automaticallyAdjustKeyboardInsets
-            keyboardShouldPersistTaps="handled"
-          >
-            <Button
-              secondary
-              label="← Back to learning"
-              onPress={() => setLesson(null)}
-            />
-            {lesson && (
-              <>
-                <Text style={{ fontSize: 48 }}>{lesson.flag}</Text>
-                <Text style={s.heading}>{lesson.name}: a simple hello.</Text>
-                <Text style={s.reading}>
-                  {lesson.greeting} = {lesson.answer}
-                  {"\n\n"}
-                  {lesson.phrase} = {lesson.meaning}
-                </Text>
-                <Text style={s.sectionHeading}>
-                  What does “{lesson.greeting}” mean?
-                </Text>
-                {lesson.options.map((o) => (
-                  <Button
-                    key={o}
-                    secondary
-                    label={o}
-                    onPress={() => {
-                      setAnswer(o);
-                      if (o === lesson.answer)
-                        setProgress((p) => ({ ...p, [lesson.name]: 100 }));
-                    }}
-                  />
-                ))}
-                {answer && (
-                  <Text style={s.cardTitle}>
-                    {answer === lesson.answer
-                      ? "Correct! You completed this introductory lesson."
-                      : "Not quite. Take another look and try again."}
-                  </Text>
-                )}
-              </>
+            {!recovery && (
+              <Button
+                secondary
+                label={
+                  signup
+                    ? "Already have an account? Sign in"
+                    : "New here? Create an account"
+                }
+                onPress={() => {
+                  setSignup(!signup);
+                  setPassword("");
+                  setConfirmation("");
+                  setNotice("");
+                }}
+              />
+            )}
+            {!recovery && !signup && (
+              <Button
+                secondary
+                label="Send password reset email"
+                onPress={() =>
+                  void run(async () => {
+                    if (!backend)
+                      throw new Error(
+                        "Password reset is not available in this preview.",
+                      );
+                    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim()))
+                      throw new Error("Enter a valid email address.");
+                    const { error } = await backend.auth.resetPasswordForEmail(
+                      email.trim(),
+                      { redirectTo: authRedirect },
+                    );
+                    if (error) throw error;
+                    setNotice("Password reset email requested.");
+                  })
+                }
+              />
             )}
           </ScrollView>
         </SafeAreaView>
       </Modal>
-      {!!notice && !form && !auth && !reader && !lesson && (
+      {!!notice && !form && !auth && !reader && (
         <View accessibilityRole="alert" style={s.toast}>
           <Text style={{ flex: 1, color: "white", lineHeight: 21 }}>
             {notice}
@@ -2028,11 +2311,17 @@ const s = StyleSheet.create({
   momentumText: { flex: 1, color: "#7a806b", fontSize: 11 },
   quickActions: {
     flexDirection: "row",
+    flexWrap: "wrap",
     justifyContent: "space-between",
     paddingVertical: 8,
     marginBottom: 10,
   },
-  quickAction: { alignItems: "center", gap: 9, flex: 1 },
+  quickAction: {
+    alignItems: "center",
+    gap: 9,
+    width: "30%",
+    paddingVertical: 8,
+  },
   quickIcon: {
     width: 49,
     height: 49,

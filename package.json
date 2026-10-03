@@ -1,6 +1,6 @@
 {
   "name": "education-forum",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "main": "index.ts",
   "scripts": {
@@ -16,7 +16,12 @@
     "format": "prettier --write App.tsx src tests *.json",
     "build:native": "expo export --platform ios --platform android --output-dir dist-native",
     "preview:android": "npx eas-cli build --profile preview --platform android",
-    "preview:ios": "npx eas-cli build --profile preview --platform ios"
+    "production:android": "npx eas-cli build --profile production --platform android",
+    "preview:ios": "npx eas-cli build --profile preview --platform ios",
+    "check:play": "node scripts/check-play-release.cjs",
+    "check:backend": "node scripts/check-backend.cjs",
+    "test:backend-browser": "node tests/backend.browser.cjs",
+    "assets:play": "node scripts/render-play-assets.cjs"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.0",
@@ -27,9 +32,11 @@
     "expo-document-picker": "~57.0.2",
     "expo-file-system": "~57.0.7",
     "expo-haptics": "~57.0.3",
+    "expo-speech": "~57.0.3",
     "expo-splash-screen": "~57.0.9",
     "expo-status-bar": "~57.0.1",
     "expo-system-ui": "~57.0.4",
+    "expo-video": "~57.0.5",
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "react-native": "0.86.3",

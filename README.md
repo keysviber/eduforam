@@ -1,8 +1,8 @@
 # Education Forum
 
-Education-first native iOS and Android app built with Expo / React Native, with an optional browser preview. Five fixed phone tabs, compact screens, native sheets, safe areas, haptics, and a forest-green visual identity. The supplied specification is preserved in [docs/product-specification.md](docs/product-specification.md).
+Education-first native iOS and Android app built with Expo / React Native, with an optional browser preview. Four core phone tabs, compact screens, native sheets, safe areas, haptics, and a forest-green visual identity. The supplied specification is preserved in [docs/product-specification.md](docs/product-specification.md).
 
-**Status: functional development preview with a backend migration, not a production-complete release.** The implementation does not process real money. See [release readiness](docs/RELEASE_READINESS.md) for explicit gaps.
+**Status: 1.1.0 implementation; not yet production-verified.** Video lessons, grade-based Home, ordered language learning, classrooms and private support are included. Funding, subscriptions and earnings remain excluded. See [next release setup and launch gates](docs/NEXT_RELEASE.md). See [Android release setup](docs/ANDROID_RELEASE.md) for the required backend, signing, published pages and device validation, and [release readiness](docs/RELEASE_READINESS.md) for broader product gaps.
 
 ## Run
 
@@ -29,7 +29,7 @@ npm run test:browser
 
 ## Connect Supabase
 
-1. Create a Supabase project and run `supabase/migrations/001_platform.sql` against a **fresh** database. The migration passed local PGlite integration tests with auth/storage stubs; validation against a deployed Supabase instance is still required.
+1. Create a Supabase project and run `supabase/migrations/001_platform.sql` then `supabase/migrations/002_learning_release.sql` against a **fresh** database (existing 001 installations apply only 002). The migration passed local PGlite integration tests with auth/storage stubs; validation against a deployed Supabase instance is still required.
 2. Copy `.env.example` to `.env` and provide the project URL and public anon key. Never put a service role key in the mobile application.
 3. Configure email confirmation, email delivery, authentication redirect URLs, and password recovery in Supabase.
 4. Register a user in the app. Assign the first owner from a trusted database console: `update public.profiles set role = 'owner' where id = '<your-auth-user-uuid>';`. No client can assign roles to itself.

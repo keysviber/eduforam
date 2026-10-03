@@ -3,15 +3,24 @@
     "name": "Education Forum",
     "slug": "education-forum",
     "scheme": "educationforum",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.educationforum.app"
+      "bundleIdentifier": "com.educationforum.app",
+      "buildNumber": "2"
     },
     "android": {
       "package": "com.educationforum.app",
+      "versionCode": 2,
+      "allowBackup": false,
+      "blockedPermissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.SYSTEM_ALERT_WINDOW"
+      ],
       "adaptiveIcon": {
         "foregroundImage": "./assets/icon-v2.png",
         "backgroundColor": "#2c5542"
@@ -31,7 +40,8 @@
           "image": "./assets/icon-v2.png",
           "imageWidth": 180
         }
-      ]
+      ],
+      "expo-video"
     ],
     "icon": "./assets/icon-v2.png",
     "backgroundColor": "#fafbf7"

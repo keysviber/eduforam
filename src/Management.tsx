@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { View, Text, TextInput, Pressable, StyleSheet } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { backend } from "./backend";
+import { coreEducationRelease } from "./release";
 export type Plan = {
   id: string;
   name: string;
@@ -59,7 +60,7 @@ export function Plans({ notify }: { notify: (s: string) => void }) {
   );
 }
 export function Management({ notify }: { notify: (s: string) => void }) {
-  const [tab, setTab] = useState("Plans"),
+  const [tab, setTab] = useState(coreEducationRelease ? "Users" : "Plans"),
     [plans, setPlans] = useState<Plan[]>([]),
     [name, setName] = useState(""),
     [price, setPrice] = useState(""),
@@ -194,15 +195,21 @@ export function Management({ notify }: { notify: (s: string) => void }) {
           "Users",
           "Reports",
           "Audit trail",
-        ].map((t) => (
-          <Pressable
-            key={t}
-            onPress={() => setTab(t)}
-            style={[s.tab, tab === t && { backgroundColor: "#dce9d9" }]}
-          >
-            <Text style={s.text}>{t}</Text>
-          </Pressable>
-        ))}
+        ]
+          .filter(
+            (t) =>
+              !coreEducationRelease ||
+              ["Users", "Reports", "Audit trail"].includes(t),
+          )
+          .map((t) => (
+            <Pressable
+              key={t}
+              onPress={() => setTab(t)}
+              style={[s.tab, tab === t && { backgroundColor: "#dce9d9" }]}
+            >
+              <Text style={s.text}>{t}</Text>
+            </Pressable>
+          ))}
       </View>
       {field("Reason for change", reason, setReason)}
       {tab === "Plans" && (

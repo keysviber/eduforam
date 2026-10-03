@@ -4,10 +4,10 @@ Education Forum uses React Native views, text inputs, scrolling and modals on iO
 
 ## App experience
 
-- Five fixed tabs: Home, Library, Learn, Support, You.
+- Four core release tabs: Home, Library, Learn, You.
 - Compact home, swipeable book shelf, two-column library, saved books and last-opened book.
-- Languages inside Learn; earnings, Premier and student moments inside You.
-- Screen back buttons, Android hardware back, iOS dismissible lesson/submission sheets.
+- Ordered language categories with pronunciation, video lessons, invitation classrooms and private Safe Room support. Earnings, Premier and funding remain deferred. See [1.1.0 setup](NEXT_RELEASE.md).
+- Screen back buttons, Android hardware back, iOS dismissible reader/submission sheets.
 - Safe-area-aware layouts, keyboard-aware forms, pull-to-refresh and native selection haptics.
 - Original home-screen icon, Android adaptive icon, and launch screen.
 
@@ -51,6 +51,10 @@ npx eas-cli build --profile simulator --platform ios
 Build commands require account setup and may use your Expo build quota. No cloud build or store submission has been started in this task. No APK or IPA has been produced yet.
 
 ## Backend and launch status
+
+For the current core Android release setup and validation, use
+[ANDROID_RELEASE.md](ANDROID_RELEASE.md). Historical verification below predates
+the core release scope and does not establish current Windows native readiness.
 
 The app currently defaults to clearly labelled demo content unless Supabase environment variables are set. The visual/native redesign does not complete payment integrations or the unfinished product workflows in [RELEASE_READINESS.md](RELEASE_READINESS.md).
 

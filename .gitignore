@@ -3,6 +3,10 @@ node_modules/
 dist/
 .env
 .env.local
+.env.*.local
+*.jks
+*.keystore
+credentials.json
 *.tsbuildinfo
 dist-native/
 

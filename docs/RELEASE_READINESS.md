@@ -2,6 +2,18 @@
 
 This is an initial implementation, not a claim that the complete specification is delivered. External credentials are only one category of remaining work: several product workflows still need development.
 
+## Current Android scope
+
+The owner selected a core education first release. Funding, Premier and earnings
+remain hidden. Version 1.1.0 adds video lessons, grade-based Home, ordered language learning, classrooms and private support. See [current scope and setup](NEXT_RELEASE.md); historical notes below predate this version.
+See [ANDROID_RELEASE.md](ANDROID_RELEASE.md) for current setup and launch gates.
+Native recovery callbacks/password updates, foreground token refresh, stale
+account-response guards, per-account device lesson progress, and production
+configuration validation have been added. Live authentication and account
+deletion operations still require the configured backend and owner pages.
+Historical five-tab and preview verification notes below describe earlier work;
+the core release has four tabs: Home, Library, Learn, You.
+
 ## Implemented
 
 - Shared React Native UI with five fixed mobile tabs, compact home, horizontal reading shelf, two-column library, native sheets, hardware-back handling, safe areas, and haptics.
