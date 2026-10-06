@@ -20,6 +20,12 @@ const assert = require("node:assert/strict");
     .click();
   const accountDialog = page.getByRole("dialog");
   await page.getByText("Create your account", { exact: true }).waitFor();
+  await page.getByLabel("Name", { exact: true }).fill("Test");
+  await page.getByLabel("Surname", { exact: true }).fill("Learner");
+  await page.getByLabel("Country", { exact: true }).fill("Zimbabwe");
+  await page
+    .getByLabel("Date of birth (YYYY-MM-DD)", { exact: true })
+    .fill("2005-01-01");
   await page.getByLabel("Email", { exact: true }).fill("invalid");
   await accountDialog
     .getByRole("button", { name: "Create account", exact: true })

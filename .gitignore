@@ -7,6 +7,9 @@ dist/
 *.jks
 *.keystore
 credentials.json
+.credentials/
+*.log
+release-artifacts/
 *.tsbuildinfo
 dist-native/
 

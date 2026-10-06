@@ -107,3 +107,45 @@ export const curriculum = [
     ],
   },
 ];
+
+// Additional practical vocabulary, using the same progress and pronunciation flow.
+languageCategories.push("At school", "Food and water");
+const extraUnits: Record<string, string[][][]> = {
+  French: [
+    [
+      ["Un livre", "A book"],
+      ["Un stylo", "A pen"],
+      ["Une ?cole", "A school"],
+    ],
+    [
+      ["De l?eau", "Water"],
+      ["Du pain", "Bread"],
+      ["Une pomme", "An apple"],
+    ],
+  ],
+  Dutch: [
+    [
+      ["Een boek", "A book"],
+      ["Een pen", "A pen"],
+      ["Een school", "A school"],
+    ],
+    [
+      ["Water", "Water"],
+      ["Brood", "Bread"],
+      ["Een appel", "An apple"],
+    ],
+  ],
+  Spanish: [
+    [
+      ["Un libro", "A book"],
+      ["Un bol?grafo", "A pen"],
+      ["Una escuela", "A school"],
+    ],
+    [
+      ["Agua", "Water"],
+      ["Pan", "Bread"],
+      ["Una manzana", "An apple"],
+    ],
+  ],
+};
+for (const course of curriculum) course.units.push(...extraUnits[course.name]);

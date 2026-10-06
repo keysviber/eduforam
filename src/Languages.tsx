@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { View, Text, Pressable, StyleSheet } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { Ionicons } from "@expo/vector-icons";
 import * as Speech from "expo-speech";
 import { curriculum, languageCategories } from "./discovery";
 
@@ -148,7 +149,7 @@ export function Languages({
             style={s.button}
             onPress={() => void pronounce(word)}
           >
-            <Text>Listen to pronunciation</Text>
+            <Ionicons name="volume-high" size={24} color="#245642" />
           </Pressable>
         </View>
       ))}

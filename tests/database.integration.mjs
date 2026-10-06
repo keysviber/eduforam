@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 const require = createRequire(import.meta.url);
 const { PGlite } = require("@electric-sql/pglite");
 const db = new PGlite();
-await db.exec(`create role anon; create role authenticated; create schema auth; create schema storage;
+await db.exec(`create role anon; create role authenticated; create role service_role bypassrls; create schema auth; create schema storage;
 create table auth.users(id uuid primary key, raw_user_meta_data jsonb default '{}');
 create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid $$;
 create table storage.buckets(id text primary key,name text,public boolean,file_size_limit bigint,allowed_mime_types text[]);
@@ -161,7 +161,7 @@ await assert.rejects(
   () =>
     asUser(
       student,
-      `insert into classrooms(owner_id,title,grade) values('${student}','My classroom','Form 4')`,
+      `insert into classrooms(owner_id,title,grade) values('${other}','My classroom','Form 4')`,
     ),
   /row-level security/,
 );
@@ -279,7 +279,236 @@ assert.equal(
 await db.exec("set role anon");
 assert.equal((await db.query("select * from support_requests")).rows.length, 0);
 await db.exec("reset role");
+await db.exec(
+  "update profiles set suspended=false; revoke select on quiz_questions from authenticated; grant select(id,subject,prompt,choices) on quiz_questions to authenticated;",
+);
+await assert.rejects(
+  () => asUser(student, "select answer from quiz_questions"),
+  /permission denied/,
+);
+assert.equal(
+  (await asUser(student, "select answer_quiz(1,1) result")).rows[0].result
+    .points,
+  10,
+);
+await assert.rejects(
+  () => asUser(student, "select answer_quiz(1,1)"),
+  /duplicate key/,
+);
+await assert.rejects(
+  () => asUser(student, "insert into quiz_answers values(auth.uid(),2,1,9999)"),
+  /row-level security/,
+);
+assert.equal(
+  Number(
+    (await asUser(student, "select * from quiz_leaderboard()")).rows[0].points,
+  ),
+  10,
+);
+await assert.rejects(
+  () => asUser(student, `select set_moderator('${student}',true)`),
+  /Administrator permission/,
+);
+await asUser(admin, `select set_moderator('${other}',true)`);
+assert.equal(
+  (await asUser(other, "select can_moderate() allowed")).rows[0].allowed,
+  true,
+);
+assert.equal(
+  (await asUser(other, "select is_admin() allowed")).rows[0].allowed,
+  false,
+);
+const talent = "99999999-9999-4999-8999-999999999999";
+await asUser(
+  student,
+  `insert into entries(id,owner_id,kind,title,description,category,author,level,file_path,video_format) values('${talent}','${student}','reel','Talent show','An original student talent performance','Music','Student','Form 4','${student}/talent.mp4','talent')`,
+);
+assert.equal(
+  (await asUser(student, `select status from entries where id='${talent}'`))
+    .rows[0].status,
+  "approved",
+);
+await asUser(
+  other,
+  `select review_entry('${talent}','removed','Community review')`,
+);
+assert.equal(
+  (
+    await asUser(
+      student,
+      "select * from notifications where message like 'Talent show:%'",
+    )
+  ).rows.length,
+  1,
+);
+assert.equal(
+  (
+    await asUser(
+      other,
+      "select * from notifications where message like 'Talent show:%'",
+    )
+  ).rows.length,
+  0,
+);
+const paid = (
+  await asUser(
+    student,
+    `insert into classrooms(owner_id,title,grade,price_minor) values('${student}','Paid maths class','Form 4',100) returning *`,
+  )
+).rows[0];
+await assert.rejects(
+  () => asUser(other, `select join_classroom('${paid.join_code}')`),
+  /verified purchase/,
+);
+// Service privileges must never be granted by an ordinary client.
+await assert.rejects(
+  () => asUser(student, `select sync_purchase_access('${student}','[]',now())`),
+  /permission denied/,
+);
+await assert.rejects(
+  () =>
+    asUser(
+      student,
+      `insert into purchase_access(user_id,product_id) values('${student}','remove_ads')`,
+    ),
+  /row-level security/,
+);
+await asUser(
+  admin,
+  `select save_store_product('class_test','classroom_test','${paid.id}','Configure tested product')`,
+);
+await db.query(
+  `select sync_purchase_access('${other}','[{"product_id":"class_test","expires_at":null}]',now())`,
+);
+await asUser(other, `select join_classroom('${paid.join_code}')`);
+assert.equal(
+  (await asUser(other, `select in_classroom('${paid.id}') allowed`)).rows[0]
+    .allowed,
+  true,
+);
+await db.query(
+  `select sync_purchase_access('${other}','[]',now()+interval '1 second')`,
+);
+assert.equal(
+  (await asUser(other, `select in_classroom('${paid.id}') allowed`)).rows[0]
+    .allowed,
+  false,
+);
+await db.query(
+  `select sync_purchase_access('${other}','[{"product_id":"class_test","expires_at":null}]',now()-interval '1 minute')`,
+);
+assert.equal(
+  (await asUser(other, `select has_classroom_access('${paid.id}') allowed`))
+    .rows[0].allowed,
+  false,
+);
+await asUser(student, "select register_push('ExpoPushToken[test_token]')");
+await db.query(
+  `insert into notifications(user_id,message) values('${student}','Private test')`,
+);
+assert.equal(
+  (await db.query("select * from claim_push_jobs()")).rows.length,
+  1,
+);
+assert.equal(
+  (await db.query("select * from claim_push_jobs()")).rows.length,
+  0,
+);
+await asUser(other, "select register_push('ExpoPushToken[test_token]')");
+await db.query("update push_jobs set next_attempt=now()-interval '1 minute'");
+assert.equal(
+  (await db.query("select * from claim_push_jobs()")).rows.length,
+  0,
+);
+await assert.rejects(
+  () => asUser(student, "select * from claim_push_jobs()"),
+  /permission denied/,
+);
+// One timed viewing event is one pending credit; clients cannot approve their own earnings.
+await db.exec(
+  `update entries set status='approved' where id='${talent}'; update earnings_policies set active=false; insert into earnings_policies(role,view_rate,minimum_payout_minor,currency,active) values('student',0.025,1,'USD',true)`,
+);
+assert.equal(
+  (await asUser(student, `select begin_content_usage('${talent}') id`)).rows[0]
+    .id,
+  null,
+);
+const activity = (
+  await asUser(other, `select begin_content_usage('${talent}') id`)
+).rows[0].id;
+assert.equal(
+  (await asUser(other, `select begin_content_usage('${talent}') id`)).rows[0]
+    .id,
+  activity,
+);
+await asUser(other, `select heartbeat_content_usage('${activity}')`);
+assert.equal(
+  (await db.query(`select seconds from content_usage where id='${activity}'`))
+    .rows[0].seconds,
+  0,
+);
+for (let i = 0; i < 3; i++) {
+  await db.query(
+    `update content_usage set last_seen=now()-interval '11 seconds' where id='${activity}'`,
+  );
+  await asUser(other, `select heartbeat_content_usage('${activity}')`);
+}
+await assert.rejects(
+  () =>
+    asUser(other, `select review_usage('${activity}',true,'Self approval')`),
+  /Administrator permission/,
+);
+await asUser(
+  admin,
+  `select review_usage('${activity}',true,'Checked content activity')`,
+);
+await assert.rejects(
+  () =>
+    asUser(
+      admin,
+      `select review_usage('${activity}',true,'Duplicate approval')`,
+    ),
+  /Qualified activity not found/,
+);
+assert.equal(
+  Number(
+    (await asUser(student, "select * from creator_summary()")).rows[0].earned,
+  ),
+  0.025,
+);
+await db.query(
+  `insert into payout_accounts(user_id,stripe_account) values('${student}','acct_test')`,
+);
+const payout = (
+  await asUser(student, "select request_creator_payout('USD') id")
+).rows[0].id;
+assert.equal(
+  Number(
+    (
+      await db.query(
+        `select amount_minor from payout_requests where id='${payout}'`,
+      )
+    ).rows[0].amount_minor,
+  ),
+  2,
+);
+await assert.rejects(
+  () => asUser(student, "select request_creator_payout('USD')"),
+  /below the payout minimum/,
+);
+await assert.rejects(
+  () => asUser(student, `select * from claim_payout('${payout}')`),
+  /permission denied/,
+);
+await db.query(`select * from claim_payout('${payout}')`);
+await db.query(
+  `update payout_requests set attempted_at=now()-interval '24 hours' where id='${payout}'`,
+);
+assert.equal(
+  (await db.query(`select * from claim_payout('${payout}')`)).rows.length,
+  0,
+);
 await db.close();
 console.log(
-  "PASS: migration, publication RLS, roles, private evidence, removal, financial writes, plan configuration, suspension and audit history.",
+  "PASS: migrations, RLS, quiz integrity, moderation, private push queue, verified purchases/refunds, classroom access, reviewed earnings and payout reservation.",
 );

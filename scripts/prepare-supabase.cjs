@@ -1,5 +1,10 @@
 const fs = require("node:fs");
-const migrations = ["001_platform.sql", "002_learning_release.sql"];
+const migrations = [
+  "001_platform.sql",
+  "002_learning_release.sql",
+  "003_community.sql",
+  "004_services.sql",
+];
 const output =
   "-- Education Forum 1.1.0: one-time setup for a project without app tables.\n" +
   "-- Run the entire file in the Supabase SQL Editor. Do not run on an existing installation.\n" +
@@ -12,4 +17,4 @@ const output =
     .join("") +
   "\nnotify pgrst, 'reload schema';\ncommit;\n";
 fs.writeFileSync("supabase/SETUP.sql", output);
-console.log("Prepared supabase/SETUP.sql from both migrations.");
+console.log("Prepared supabase/SETUP.sql from all migrations.");

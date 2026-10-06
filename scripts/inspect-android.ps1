@@ -6,15 +6,18 @@ param(
 $ErrorActionPreference = 'Stop'
 $apkPath = (Resolve-Path -LiteralPath $Apk).Path
 $buildTools = Join-Path $Sdk 'build-tools\36.0.0'
-& (Join-Path $buildTools 'zipalign.exe') -c -P 16 4 $apkPath
-if ($LASTEXITCODE -ne 0) { throw 'APK ZIP alignment verification failed' }
-Write-Output 'PASS: APK ZIP alignment supports 16 KB pages'
+$isBundle = [System.IO.Path]::GetExtension($apkPath) -eq '.aab'
+if (-not $isBundle) {
+  & (Join-Path $buildTools 'zipalign.exe') -c -P 16 4 $apkPath
+  if ($LASTEXITCODE -ne 0) { throw 'APK ZIP alignment verification failed' }
+  Write-Output 'PASS: APK ZIP alignment supports 16 KB pages'
+}
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $archive = [System.IO.Compression.ZipFile]::OpenRead($apkPath)
 $checked = 0
 try {
   foreach ($entry in $archive.Entries) {
-    if ($entry.FullName -notmatch '^lib/(arm64-v8a|x86_64)/.+\.so$') { continue }
+    if ($entry.FullName -notmatch '^(base/)?lib/(arm64-v8a|x86_64)/.+\.so$') { continue }
     $buffer = [System.IO.MemoryStream]::new()
     $source = $entry.Open()
     try { $source.CopyTo($buffer); $bytes = $buffer.ToArray() }
@@ -42,11 +45,19 @@ try {
 } finally { $archive.Dispose() }
 if ($checked -eq 0) { throw 'No 64-bit native libraries were found' }
 Write-Output "PASS: $checked native 64-bit libraries have 16 KB ELF LOAD alignment"
-$certificate = & $Java -jar (Join-Path $buildTools 'lib\apksigner.jar') verify --print-certs $apkPath
-if ($LASTEXITCODE -ne 0) { throw 'APK signature verification failed' }
+if ($isBundle) {
+  $javaBin = Split-Path $Java -Parent
+  $verification = & (Join-Path $javaBin 'jarsigner.exe') -verify $apkPath 2>&1
+  if ($LASTEXITCODE -ne 0 -or ($verification -join "`n") -notmatch 'jar verified\.') { throw 'AAB signature verification failed' }
+  $certificate = & (Join-Path $javaBin 'keytool.exe') -printcert -jarfile $apkPath
+  if ($LASTEXITCODE -ne 0) { throw 'AAB certificate inspection failed' }
+} else {
+  $certificate = & $Java -jar (Join-Path $buildTools 'lib\apksigner.jar') verify --print-certs $apkPath
+  if ($LASTEXITCODE -ne 0) { throw 'APK signature verification failed' }
+}
 $certificate | Write-Output
 Get-FileHash -LiteralPath $apkPath -Algorithm SHA256 | Format-List
 if (($certificate -join "`n") -match 'CN=Android Debug') {
-  throw 'BLOCKED for Play: this APK is debug-signed. Build a production AAB with the owner upload key.'
+  throw 'BLOCKED for Play: this artifact is debug-signed. Build with the owner upload key.'
 }
-Write-Output 'APK static checks passed. Inspect the final signed AAB and test Play-generated APKs on 16 KB devices before rollout.'
+Write-Output 'Artifact static checks passed. Test Play-generated APKs on 16 KB devices before rollout.'

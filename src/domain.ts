@@ -12,6 +12,7 @@ export type Entry = {
   level: string;
   status: Status;
   file_path?: string;
+  video_format?: "lesson" | "talent";
   created_at: string;
   target: number;
   raised: number;
@@ -122,7 +123,14 @@ export const initialEntries: Entry[] = [
   description: r[3],
   category: r[4],
   author: r[5],
-  level: r[1] === "book" ? (r[0] === "b3" ? "Form 5" : "Form 4") : r[1] === "course" ? "Form 4" : r[6],
+  level:
+    r[1] === "book"
+      ? r[0] === "b3"
+        ? "Form 5"
+        : "Form 4"
+      : r[1] === "course"
+        ? "Form 4"
+        : r[6],
   status: "approved",
   created_at: "2026-09-01",
   target: 1200,

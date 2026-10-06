@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { View, Text, TextInput, Pressable, StyleSheet } from "react-native";
 import { backend } from "./backend";
+import { useBilling } from "./Billing";
 import { grades } from "./discovery";
 import type { Entry } from "./domain";
 
@@ -28,7 +29,15 @@ export function GradePicker({
     </View>
   );
 }
-type Room = { id: string; title: string; grade: string; join_code: string };
+type Room = {
+  id: string;
+  title: string;
+  grade: string;
+  join_code: string;
+  owner_id: string;
+  price_minor: number;
+  currency: string;
+};
 type Request = {
   id: string;
   message: string;
@@ -52,12 +61,21 @@ export function SchoolFeatures({
   signIn: () => void;
 }) {
   const [rooms, setRooms] = useState<Room[]>([]);
+  const billing = useBilling();
+  const [offer, setOffer] = useState<{
+    id: string;
+    title: string;
+    product_id: string;
+    storePrice: string;
+    code: string;
+  } | null>(null);
   const [links, setLinks] = useState<
     { classroom_id: string; entry_id: string }[]
   >([]);
   const [requests, setRequests] = useState<Request[]>([]);
   const [enabled, setEnabled] = useState(false);
   const [code, setCode] = useState("");
+  const [price, setPrice] = useState("0");
   const [title, setTitle] = useState("");
   const [grade, setGrade] = useState("Form 1");
   const [message, setMessage] = useState("");
@@ -163,6 +181,7 @@ export function SchoolFeatures({
             resources.
           </Text>
           <TextInput
+            placeholderTextColor="#526477"
             accessibilityLabel="Classroom invitation code"
             placeholder="Invitation code"
             autoCapitalize="none"
@@ -176,6 +195,28 @@ export function SchoolFeatures({
               void act(async () => {
                 if (!code.trim())
                   throw new Error("Enter your invitation code.");
+                setOffer(null);
+                const lookup = await backend!.rpc("classroom_offer", {
+                  invite_code: code,
+                });
+                if (lookup.error) throw lookup.error;
+                const room = lookup.data?.[0];
+                if (!room) throw new Error("Invitation code not found.");
+                if (room.price_minor > 0) {
+                  const access = await backend!.rpc("has_classroom_access", {
+                    room_id: room.id,
+                  });
+                  if (access.error) throw access.error;
+                  if (!access.data) {
+                    if (!room.product_id)
+                      throw new Error(
+                        "This paid classroom's store product is not configured yet. Contact the teacher.",
+                      );
+                    const storePrice = await billing.price(room.product_id);
+                    setOffer({ ...room, storePrice, code });
+                    return;
+                  }
+                }
                 const { error } = await backend!.rpc("join_classroom", {
                   invite_code: code,
                 });
@@ -186,6 +227,45 @@ export function SchoolFeatures({
               })
             }
           />
+          {offer && (
+            <View style={s.card}>
+              <Text style={s.title}>{offer.title}</Text>
+              <Text>
+                Store price: {offer.storePrice}. This purchase also removes ads.
+              </Text>
+              <Action
+                label={`Buy & join · ${offer.storePrice}`}
+                onPress={() =>
+                  void act(async () => {
+                    await billing.purchase(offer.product_id);
+                    const r = await backend!.rpc("join_classroom", {
+                      invite_code: offer.code,
+                    });
+                    if (r.error) throw r.error;
+                    setOffer(null);
+                    setCode("");
+                    await load();
+                    setNotice("Purchase verified. You joined the classroom.");
+                  })
+                }
+              />
+              <Action
+                label="Restore existing purchase"
+                onPress={() =>
+                  void act(async () => {
+                    await billing.restore();
+                    const r = await backend!.rpc("join_classroom", {
+                      invite_code: offer.code,
+                    });
+                    if (r.error) throw r.error;
+                    setOffer(null);
+                    await load();
+                  })
+                }
+              />
+              <Action label="Cancel" onPress={() => setOffer(null)} />
+            </View>
+          )}
           {!rooms.length && (
             <Text>No classrooms yet. Ask your teacher for an invitation.</Text>
           )}
@@ -193,7 +273,12 @@ export function SchoolFeatures({
             <View key={room.id} style={s.card}>
               <Text style={s.title}>{room.title}</Text>
               <Text>{room.grade}</Text>
-              {admin && (
+              <Text>
+                {room.price_minor
+                  ? `${room.currency} ${(room.price_minor / 100).toFixed(2)}`
+                  : "Free classroom"}
+              </Text>
+              {(admin || room.owner_id === userId) && (
                 <Text selectable>Invitation code: {room.join_code}</Text>
               )}
               {links
@@ -208,7 +293,7 @@ export function SchoolFeatures({
                         label={entry.title}
                         onPress={() => openEntry(entry)}
                       />
-                      {admin && (
+                      {(admin || room.owner_id === userId) && (
                         <Action
                           label={`Remove ${entry.title} from classroom`}
                           onPress={() =>
@@ -230,7 +315,7 @@ export function SchoolFeatures({
               {!links.some((l) => l.classroom_id === room.id) && (
                 <Text>Your teacher has not shared resources yet.</Text>
               )}
-              {admin ? (
+              {admin || room.owner_id === userId ? (
                 <Action
                   label="Choose resources"
                   onPress={() =>
@@ -253,7 +338,7 @@ export function SchoolFeatures({
                   }
                 />
               )}
-              {admin &&
+              {(admin || room.owner_id === userId) &&
                 selected === room.id &&
                 entries
                   .filter(
@@ -282,24 +367,49 @@ export function SchoolFeatures({
                   ))}
             </View>
           ))}
-          {admin && (
+          {userId && (
             <View style={s.card}>
               <Text style={s.title}>Create classroom</Text>
               <TextInput
+                placeholderTextColor="#526477"
                 accessibilityLabel="Classroom title"
                 placeholder="Classroom title"
                 value={title}
                 onChangeText={setTitle}
                 style={s.input}
               />
+              <TextInput
+                accessibilityLabel="Classroom price in USD"
+                placeholder="Price in USD (0 for free)"
+                placeholderTextColor="#526477"
+                value={price}
+                onChangeText={setPrice}
+                keyboardType="decimal-pad"
+                style={s.input}
+              />
+              <Text>
+                Price in USD. Paid enrolment requires payment setup before
+                students can join.
+              </Text>
               <GradePicker value={grade} onChange={setGrade} />
               <Action
                 label="Create classroom"
                 onPress={() =>
                   void act(async () => {
-                    const { error } = await backend!
-                      .from("classrooms")
-                      .insert({ title: title.trim(), grade, owner_id: userId });
+                    if (
+                      !/^\d+(\.\d{1,2})?$/.test(price) ||
+                      Number(price) > 100000
+                    )
+                      throw new Error(
+                        "Enter a valid price with up to two decimal places.",
+                      );
+                    const { error } = await backend!.from("classrooms").insert({
+                      title: title.trim(),
+                      grade,
+                      owner_id: userId,
+                      price_minor: Math.round(Number(price) * 100),
+                      currency: "USD",
+                    });
                     if (error) throw error;
                     setTitle("");
                     await load();
@@ -341,37 +451,43 @@ export function SchoolFeatures({
               School support requests are not currently available. Please speak
               to a trusted teacher or adult.
             </Text>
-          ) : (
-            <>
-              <TextInput
-                accessibilityLabel="Private support message"
-                placeholder="What would you like support with?"
-                multiline
-                maxLength={4000}
-                value={message}
-                onChangeText={setMessage}
-                style={[s.input, { minHeight: 120 }]}
-              />
-              <Action
-                label="Send private request"
-                onPress={() =>
-                  void act(async () => {
-                    if (message.trim().length < 10)
-                      throw new Error("Please add at least 10 characters.");
-                    const { error } = await backend!
-                      .from("support_requests")
-                      .insert({ user_id: userId, message: message.trim() });
-                    if (error) throw error;
-                    setMessage("");
-                    await load();
-                    setNotice(
-                      "Request sent. Return here to check for a response.",
+          ) : null}
+          <>
+            <TextInput
+              placeholderTextColor="#526477"
+              accessibilityLabel="Private support message"
+              placeholder="What would you like support with?"
+              multiline
+              maxLength={4000}
+              value={message}
+              onChangeText={setMessage}
+              style={[s.input, { minHeight: 120 }]}
+            />
+            <Action
+              label={
+                enabled ? "Send a message" : "Support currently unavailable"
+              }
+              onPress={() =>
+                void act(async () => {
+                  if (!enabled)
+                    throw new Error(
+                      "The school must enable staffed support before messages can be sent.",
                     );
-                  })
-                }
-              />
-            </>
-          )}
+                  if (message.trim().length < 10)
+                    throw new Error("Please add at least 10 characters.");
+                  const { error } = await backend!
+                    .from("support_requests")
+                    .insert({ user_id: userId, message: message.trim() });
+                  if (error) throw error;
+                  setMessage("");
+                  await load();
+                  setNotice(
+                    "Request sent. Return here to check for a response.",
+                  );
+                })
+              }
+            />
+          </>
           <Text style={s.title}>
             {admin ? "Support inbox" : "Your requests"}
           </Text>
@@ -386,6 +502,7 @@ export function SchoolFeatures({
               {admin && (
                 <>
                   <TextInput
+                    placeholderTextColor="#526477"
                     accessibilityLabel={`Reply to request ${r.id}`}
                     placeholder="Private reply"
                     multiline

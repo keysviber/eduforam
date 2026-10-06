@@ -1,4 +1,7 @@
 {
+  "react-native-google-mobile-ads": {
+    "android_sdk": "classic"
+  },
   "expo": {
     "name": "Education Forum",
     "slug": "education-forum",

@@ -71,7 +71,7 @@ export function Management({ notify }: { notify: (s: string) => void }) {
     [busy, setBusy] = useState(false),
     [feature, setFeature] = useState(""),
     [mode, setMode] = useState("free"),
-    [viewRate, setViewRate] = useState("0.001"),
+    [viewRate, setViewRate] = useState("1"),
     [subscriberRate, setSubscriberRate] = useState("1"),
     [threshold, setThreshold] = useState("10"),
     [role, setRole] = useState("creator"),
@@ -152,6 +152,7 @@ export function Management({ notify }: { notify: (s: string) => void }) {
       <View>
         <Text style={s.label}>{label}</Text>
         <TextInput
+          placeholderTextColor="#526477"
           accessibilityLabel={label}
           value={value}
           onChangeText={onChange}
@@ -168,6 +169,7 @@ export function Management({ notify }: { notify: (s: string) => void }) {
     <View>
       <Text style={s.label}>{label}</Text>
       <TextInput
+        placeholderTextColor="#526477"
         accessibilityLabel={label}
         value={value}
         onChangeText={onChange}
@@ -199,7 +201,7 @@ export function Management({ notify }: { notify: (s: string) => void }) {
           .filter(
             (t) =>
               !coreEducationRelease ||
-              ["Users", "Reports", "Audit trail"].includes(t),
+              ["Users", "Reports", "Audit trail", "Earnings rules"].includes(t),
           )
           .map((t) => (
             <Pressable
@@ -355,7 +357,7 @@ export function Management({ notify }: { notify: (s: string) => void }) {
               </Pressable>
             ))}
           </View>
-          {field("Earnings per verified view", viewRate, setViewRate)}
+          {field("Earnings per 1,000 verified views", viewRate, setViewRate)}
           {field("Earnings per subscriber", subscriberRate, setSubscriberRate)}
           {field("Minimum payout", threshold, setThreshold)}
           {field("Currency", currency, setCurrency)}
@@ -374,7 +376,8 @@ export function Management({ notify }: { notify: (s: string) => void }) {
                   throw new Error("Use a three-letter currency.");
                 await config("earnings", {
                   role,
-                  view_rate: Number(viewRate),
+                  view_rate: Number(viewRate) / 1000,
+                  active: true,
                   subscriber_rate: Number(subscriberRate),
                   minimum_payout_minor: Math.round(Number(threshold) * 100),
                   currency,
@@ -400,6 +403,20 @@ export function Management({ notify }: { notify: (s: string) => void }) {
               <Text style={s.text}>
                 {u.role} · {u.suspended ? "Suspended" : "Active"}
               </Text>
+              {button(
+                u.moderator
+                  ? "Remove moderator access"
+                  : "Grant moderator access",
+                () =>
+                  void act(async () => {
+                    const { error } = await backend!.rpc("set_moderator", {
+                      target_id: u.id,
+                      enabled: !u.moderator,
+                    });
+                    if (error) throw error;
+                    await refresh();
+                  }),
+              )}
               {button(
                 u.suspended ? "Restore account" : "Suspend account",
                 () =>

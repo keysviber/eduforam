@@ -1,0 +1,23 @@
+// Education Forum upload signing
+react { extraPackagerArgs = ['--max-workers', '2'] }
+// EAS supplies its own signing configuration. Local releases never use debug keys.
+if (System.getenv('EAS_BUILD') != 'true') {
+    def credentialsFile = rootProject.file('../.credentials/android-upload.properties')
+    android.buildTypes.release.signingConfig = null
+    if (credentialsFile.exists()) {
+        def credentials = new Properties()
+        credentialsFile.withInputStream { credentials.load(it) }
+        android.signingConfigs.create('upload') {
+            storeFile rootProject.file('../.credentials/education-forum-upload.jks')
+            storePassword credentials.getProperty('storePassword')
+            keyAlias credentials.getProperty('keyAlias')
+            keyPassword credentials.getProperty('keyPassword')
+        }
+        android.buildTypes.release.signingConfig = android.signingConfigs.upload
+    }
+    gradle.taskGraph.whenReady { graph ->
+        if (graph.allTasks.any { it.project == project && it.name ==~ /(?i)(bundle|assemble|package).*Release.*/ } && !credentialsFile.exists()) {
+            throw new GradleException('Local release needs .credentials/android-upload.properties and the upload keystore. See docs/AAB_RELEASE.md.')
+        }
+    }
+}

@@ -1,0 +1,14 @@
+project_id = "education-forum"
+
+# Each function authenticates with auth.getUser or its own server-only bearer secret.
+# Disabling the legacy gateway JWT check permits current publishable keys.
+[functions.purchase-sync]
+verify_jwt = false
+[functions.revenuecat-webhook]
+verify_jwt = false
+[functions.push-dispatch]
+verify_jwt = false
+[functions.payout-account]
+verify_jwt = false
+[functions.payout-transfer]
+verify_jwt = false

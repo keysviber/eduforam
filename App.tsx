@@ -12,6 +12,7 @@ import {
   RefreshControl,
   Linking,
   ActivityIndicator,
+  Share,
 } from "react-native";
 import {
   SafeAreaProvider,
@@ -20,11 +21,30 @@ import {
 } from "react-native-safe-area-context";
 import * as Haptics from "expo-haptics";
 import { StatusBar } from "expo-status-bar";
+import { BillingProvider, PurchaseSettings } from "./src/Billing";
+import {
+  AdsProvider,
+  BottomBanner,
+  ReelAd,
+  LessonAdOffer,
+  AdPrivacy,
+} from "./src/Ads";
+import { PushSettings, disablePush } from "./src/PushSettings";
+import { CreatorEarnings, ServiceAdministration } from "./src/CreatorEarnings";
+import { useContentUsage } from "./src/useContentUsage";
+import * as DeviceNotifications from "expo-notifications";
+import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as DocumentPicker from "expo-document-picker";
 import { File } from "expo-file-system";
 import { validateAccountForm } from "./src/account-validation";
+import {
+  Quiz,
+  Notifications,
+  VideoSocial,
+  EarningRates,
+} from "./src/CommunityFeatures";
 import { Languages } from "./src/Languages";
 import { GradePicker, SchoolFeatures } from "./src/SchoolFeatures";
 import { LessonVideo } from "./src/LessonVideo";
@@ -127,13 +147,25 @@ function Button({
 export default function App() {
   return (
     <SafeAreaProvider>
-      <View style={s.canvas}>
+      <LinearGradient
+        colors={["#76e4ef", "#c4b5fd", "#f9a8d4"]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={s.canvas}
+      >
         <AppContent />
-      </View>
+      </LinearGradient>
     </SafeAreaProvider>
   );
 }
 function AppContent() {
+  const [moderator, setModerator] = useState(false);
+  const [videoFormat, setVideoFormat] = useState<"lesson" | "talent">("lesson");
+  const [firstName, setFirstName] = useState("");
+  const [surname, setSurname] = useState("");
+  const [birthDate, setBirthDate] = useState("");
+  const [country, setCountry] = useState("");
+  const [accountType, setAccountType] = useState("student");
   const [languageStart, setLanguageStart] = useState("French");
   const [editingGrade, setEditingGrade] = useState(false);
   const [grade, setGrade] = useState<string | null>(null);
@@ -142,7 +174,10 @@ function AppContent() {
   const [videoSearch, setVideoSearch] = useState("");
   const [recovery, setRecovery] = useState(false);
   const authRedirect =
-    Platform.OS === "web" ? undefined : "educationforum://auth/callback";
+    Platform.OS === "web"
+      ? process.env.EXPO_PUBLIC_AUTH_REDIRECT_URL ||
+        (typeof window !== "undefined" ? window.location.origin : undefined)
+      : "educationforum://auth/callback";
   const insets = useSafeAreaInsets();
   const scrollRef = useRef<ScrollView>(null);
   const authGeneration = useRef(0);
@@ -177,6 +212,18 @@ function AppContent() {
     [confirmation, setConfirmation] = useState(""),
     [signup, setSignup] = useState(false),
     [reviewReason, setReviewReason] = useState("");
+  useContentUsage(
+    reader?.kind !== "reel" ? reader?.id : undefined,
+    user?.id,
+    !!reader,
+  );
+  useEffect(() => {
+    if (Platform.OS === "web") return;
+    const sub = DeviceNotifications.addNotificationResponseReceivedListener(
+      () => setPage("Notifications"),
+    );
+    return () => sub.remove();
+  }, []);
   const admin = backend ? ["admin", "owner"].includes(role) : demoAdmin;
   function openAccount(create: boolean) {
     setSignup(create);
@@ -256,6 +303,7 @@ function AppContent() {
       }
       setUser(session?.user ?? null);
       setRole("student");
+      setModerator(false);
       setGrade(null);
       if (!session) {
         setRecovery(false);
@@ -270,7 +318,7 @@ function AppContent() {
         if (session)
           backend
             ?.from("profiles")
-            .select("role,grade")
+            .select("role,grade,moderator")
             .eq("id", session.user.id)
             .single()
             .then(({ data, error }) => {
@@ -280,6 +328,7 @@ function AppContent() {
                 );
               if (active && generation === authGeneration.current) {
                 setRole(data?.role || "student");
+                setModerator(!!data?.moderator);
                 setGrade(data?.grade || null);
               }
             });
@@ -411,6 +460,7 @@ function AppContent() {
     }
   }
   function openForm(kind: Kind) {
+    setVideoFormat("lesson");
     if (coreEducationRelease && !["book", "course", "reel"].includes(kind))
       return;
     if (backend && !user) {
@@ -474,7 +524,9 @@ function AppContent() {
         category: subject,
         author: author.trim() || "Community member",
         level: submissionGrade,
-        status: "pending",
+        status:
+          form === "reel" && videoFormat === "talent" ? "approved" : "pending",
+        video_format: form === "reel" ? videoFormat : "lesson",
         created_at: new Date().toISOString(),
         target: 0,
         raised: 0,
@@ -488,7 +540,9 @@ function AppContent() {
       } else setEntries((v) => [entry, ...v]);
       setForm(null);
       setNotice(
-        "Submitted for review. Your submission is private until an administrator approves it.",
+        form === "reel" && videoFormat === "talent"
+          ? "Your talent reel is live."
+          : "Submitted for review. Your submission is private until a reviewer approves it.",
       );
     });
   }
@@ -643,9 +697,20 @@ function AppContent() {
       <View style={s.card}>
         <View style={s.row}>
           <Text style={s.category}>{entry.category}</Text>
-          <Text style={s.tag}>Reviewed</Text>
+          <Text style={s.tag}>
+            {entry.video_format === "talent" ? "Community reel" : "Reviewed"}
+          </Text>
         </View>
         <Text style={s.cardTitle}>{entry.title}</Text>
+        <Button
+          label="Share"
+          secondary
+          onPress={() =>
+            void Share.share({
+              message: entry.title + " ? " + entry.description.slice(0, 120),
+            }).catch(() => setNotice("Sharing was unavailable. Please retry."))
+          }
+        />
         <Text style={s.muted}>{entry.description.slice(0, 170)}</Text>
         {entry.target > 0 && (
           <>
@@ -673,1299 +738,1554 @@ function AppContent() {
     );
   }
   return (
-    <SafeAreaView
-      edges={["top", "left", "right"]}
-      style={[s.safe, Platform.OS === "web" && s.webApp]}
-    >
-      <StatusBar style="dark" />
-      <View style={s.shell}>
-        <View style={{ flex: 1 }}>
-          <View style={s.topbar}>
-            <View style={s.headerBrand}>
-              {routeHistory.length > 0 ? (
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel="Go back"
-                  hitSlop={8}
-                  style={s.headerIcon}
-                  onPress={goBack}
-                >
-                  <Icon name="chevron-back" size={25} />
-                </Pressable>
-              ) : (
-                <View style={s.appLogo}>
-                  <Icon name="book" color="#fff" size={21} />
-                </View>
-              )}
-              <View>
-                <Text style={s.topTitle}>
-                  {page === "Overview"
-                    ? "education forum"
-                    : tabs.find((t) => t.name === page)?.label || page}
-                </Text>
-                {page === "Overview" && (
-                  <Text style={s.brandCaption}>
-                    A little learning. Every day.
-                  </Text>
-                )}
-              </View>
-            </View>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Open your profile"
-              onPress={() => go("Account", true)}
-              style={s.avatar}
-            >
-              <Text style={{ color: "#315542", fontWeight: "700" }}>
-                {user?.email?.[0].toUpperCase() || "EF"}
-              </Text>
-            </Pressable>
-          </View>
-          <ScrollView
-            ref={scrollRef}
-            contentContainerStyle={s.main}
-            showsVerticalScrollIndicator={false}
-            keyboardShouldPersistTaps="handled"
-            keyboardDismissMode="on-drag"
-            automaticallyAdjustKeyboardInsets
-            refreshControl={
-              <RefreshControl
-                refreshing={refreshing}
-                onRefresh={() => void pullToRefresh()}
-                tintColor="#2c5744"
-              />
-            }
-          >
-            {page === "Overview" && (
-              <>
-                <View style={s.greetingRow}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={s.eyebrow}>YOUR DAILY DOSE OF DISCOVERY</Text>
-                    <Text style={s.homeHeading}>
-                      What will you learn today?
-                    </Text>
-                  </View>
-                  {!backend && (
-                    <View style={s.previewPill}>
-                      <Text style={s.previewText}>DEMO</Text>
-                    </View>
-                  )}
-                </View>
-                {!user && <AccountActions />}
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel="Search the library"
-                  style={s.homeSearch}
-                  onPress={() => go("Library", true)}
-                >
-                  <Icon name="search-outline" color="#7b887d" />
-                  <Text style={s.searchHint}>
-                    Books, subjects, something new…
-                  </Text>
-                  <Icon name="options-outline" size={18} />
-                </Pressable>
-                <View style={s.quickActions}>
-                  {[
-                    {
-                      name: "Community",
-                      icon: "videocam-outline",
-                      label: "Video lessons",
-                    },
-                    {
-                      name: "Classrooms",
-                      icon: "people-outline",
-                      label: "Join classroom",
-                    },
-                    {
-                      name: "Safe Room",
-                      icon: "shield-checkmark-outline",
-                      label: "Safe Room",
-                    },
-                    {
-                      name: "Languages",
-                      icon: "globe-outline",
-                      label: "Languages",
-                    },
-                    {
-                      name: "Opportunities",
-                      icon: "heart-outline",
-                      label: "Student support",
-                    },
-                    {
-                      name: "Account",
-                      icon: "bookmark-outline",
-                      label: "Saved books",
-                    },
-                    {
-                      name: "Premier",
-                      icon: "sparkles-outline",
-                      label: "Premier",
-                    },
-                  ]
-                    .filter((x) => !coreEducationRelease || isCorePage(x.name))
-                    .map((x) => (
-                      <Pressable
-                        accessibilityRole="button"
-                        accessibilityLabel={x.label}
-                        key={x.name}
-                        onPress={() => go(x.name)}
-                        style={s.quickAction}
-                      >
-                        <View style={s.quickIcon}>
-                          <Icon name={x.icon as IconName} size={23} />
-                        </View>
-                        <Text style={s.quickLabel}>{x.label}</Text>
-                      </Pressable>
-                    ))}
-                </View>
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel={
-                    homeEntries.some((e) => e.id === lastRead)
-                      ? "Continue reading"
-                      : "Explore the library"
-                  }
-                  style={s.continueCard}
-                  onPress={() => {
-                    const book = homeEntries.find((e) => e.id === lastRead);
-                    if (book) setReader(book);
-                    else go("Library", true);
-                  }}
-                >
-                  <View style={{ flex: 1, gap: 9 }}>
-                    <Text style={s.continueEyebrow}>
-                      {homeEntries.some((e) => e.id === lastRead)
-                        ? "PICK UP WHERE YOU LEFT OFF"
-                        : "YOUR NEXT CHAPTER"}
-                    </Text>
-                    <Text numberOfLines={3} style={s.continueTitle}>
-                      {homeEntries.find((e) => e.id === lastRead)?.title ||
-                        "Big ideas start with a little curiosity."}
-                    </Text>
-                    <View style={s.continueAction}>
-                      <Text style={s.continueActionText}>
-                        {homeEntries.some((e) => e.id === lastRead)
-                          ? "Continue reading"
-                          : "Find your next read"}
-                      </Text>
-                      <Icon name="arrow-forward" size={17} color="#fff" />
-                    </View>
-                  </View>
-                  <View style={s.miniBook}>
-                    <Text style={s.miniBookTop}>EDUCATION FORUM</Text>
-                    <Icon name="leaf-outline" size={40} color="#3b5a3d" />
-                    <Text style={s.miniBookBottom}>STAY CURIOUS.</Text>
-                  </View>
-                </Pressable>
-                <View style={s.momentum}>
-                  <Icon name="sparkles-outline" size={19} color="#8e7839" />
-                  <Text style={s.momentumText}>
-                    {"Make a little time for a new idea."}
-                  </Text>
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel="Open learning"
-                    onPress={() => go("Learning", true)}
-                  >
-                    <Icon name="chevron-forward" size={18} />
-                  </Pressable>
-                </View>
-                <View style={s.card}>
-                  <Text style={s.cardTitle}>
-                    {grade ? "Your home - " + grade : "Choose your grade"}
-                  </Text>
-                  <Text style={s.muted}>
-                    Home shows your grade, one below and one above. Search the
-                    library or videos to explore other grades.
-                  </Text>
-                  {grade && (!backend || user) && (
-                    <Button
-                      secondary
-                      label={
-                        editingGrade ? "Cancel grade change" : "Change grade"
-                      }
-                      onPress={() => setEditingGrade((v) => !v)}
-                    />
-                  )}
-                  {(!backend || user) && (!grade || editingGrade) && (
-                    <GradePicker
-                      value={grade}
-                      onChange={(g) => {
-                        if (!backend) {
-                          setGrade(g);
-                          setEditingGrade(false);
-                          return;
-                        }
-                        if (busy) return;
-                        const generation = authGeneration.current;
-                        void run(async () => {
-                          const { error } = await backend!.rpc("set_my_grade", {
-                            new_grade: g,
-                          });
-                          if (error) throw error;
-                          if (generation === authGeneration.current) {
-                            setGrade(g);
-                            setEditingGrade(false);
-                          }
-                        });
-                      }}
-                    />
-                  )}
-                </View>
-                <View style={s.card}>
-                  <Text style={s.sectionHeading}>Video lessons</Text>
-                  <Text style={s.muted}>
-                    Watch approved lessons for your grade and nearby grades.
-                  </Text>
-                  {homeEntries
-                    .filter((e) => e.kind === "reel")
-                    .slice(0, 3)
-                    .map((e) => (
-                      <EntryCard key={e.id} entry={e} />
-                    ))}
-                  {!homeEntries.some((e) => e.kind === "reel") && (
-                    <Text style={s.small}>
-                      {grade
-                        ? "No approved videos for your grade yet."
-                        : "Choose your grade to see recommended videos."}
-                    </Text>
-                  )}
-                  <Button
-                    label="Search all video lessons"
-                    onPress={() => go("Community")}
-                  />
-                </View>
-                <View style={s.sectionTitle}>
-                  <Text style={s.sectionHeading}>Your next great read</Text>
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel="See all books"
-                    hitSlop={10}
-                    onPress={() => go("Library", true)}
-                  >
-                    <Text style={s.link}>See all</Text>
-                  </Pressable>
-                </View>
-                <ScrollView
-                  horizontal
-                  showsHorizontalScrollIndicator={false}
-                  contentContainerStyle={s.bookShelf}
-                >
-                  {homeBooks.slice(0, 6).map((book) => (
-                    <BookCard key={book.id} book={book} shelf />
-                  ))}
-                </ScrollView>
-                <View style={s.sectionTitle}>
-                  <Text style={s.sectionHeading}>
-                    Say hello to a new language
-                  </Text>
-                </View>
-                {languages.map((l) => (
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel={`Start ${l.name}`}
-                    key={l.name}
-                    style={s.languageRow}
-                    onPress={() => {
-                      setLanguageStart(l.name);
-                      go("Languages");
-                    }}
-                  >
-                    <View style={s.flagTile}>
-                      <Text style={{ fontSize: 26 }}>{l.flag}</Text>
-                    </View>
-                    <View style={{ flex: 1 }}>
-                      <Text style={s.cardTitle}>{l.name}</Text>
-                      <Text style={s.small}>
-                        Beginner: four categories, starting with greetings
-                      </Text>
-                    </View>
-                    <Icon name="chevron-forward" color="#628158" />
-                  </Pressable>
-                ))}
-                {!backend && (
-                  <Text style={s.demoFootnote}>
-                    Demo content · No real payments
-                  </Text>
-                )}
-              </>
-            )}
-            {page === "Library" && (
-              <>
-                <Heading
-                  eyebrow="THE EDUCATION LIBRARY"
-                  title="Your library"
-                  subtitle="Discover ideas worth spending time with."
-                  action={
-                    <Button label="+ Upload" onPress={() => openForm("book")} />
-                  }
-                />
-                <TextInput
-                  accessibilityLabel="Search library"
-                  placeholder="Search books, subjects, or authors…"
-                  value={search}
-                  onChangeText={setSearch}
-                  style={s.search}
-                />
-                <ScrollView
-                  horizontal
-                  showsHorizontalScrollIndicator={false}
-                  style={{ marginBottom: 18 }}
-                >
-                  {[
-                    "All subjects",
-                    "Science",
-                    "Mathematics",
-                    "Literature",
-                    "Technology",
-                  ].map((c) => (
+    <BillingProvider key={user?.id || "guest"} userId={user?.id}>
+      <AdsProvider>
+        <SafeAreaView
+          edges={["top", "left", "right"]}
+          style={[s.safe, Platform.OS === "web" && s.webApp]}
+        >
+          <StatusBar style="dark" />
+          <View style={s.shell}>
+            <View style={{ flex: 1 }}>
+              <View style={s.topbar}>
+                <View style={s.headerBrand}>
+                  {routeHistory.length > 0 ? (
                     <Pressable
-                      key={c}
-                      onPress={() => setCategory(c)}
-                      style={[s.chip, category === c && s.chipActive]}
+                      accessibilityRole="button"
+                      accessibilityLabel="Go back"
+                      hitSlop={8}
+                      style={s.headerIcon}
+                      onPress={goBack}
                     >
-                      <Text
-                        style={{ color: category === c ? "white" : "#51665a" }}
-                      >
-                        {c}
+                      <Icon name="chevron-back" size={25} />
+                    </Pressable>
+                  ) : (
+                    <View style={s.appLogo}>
+                      <Icon name="book" color="#fff" size={21} />
+                    </View>
+                  )}
+                  <View>
+                    <Text style={s.topTitle}>
+                      {page === "Overview"
+                        ? "education forum"
+                        : tabs.find((t) => t.name === page)?.label || page}
+                    </Text>
+                    {page === "Overview" && (
+                      <Text style={s.brandCaption}>
+                        A little learning. Every day.
                       </Text>
-                    </Pressable>
-                  ))}
-                </ScrollView>
-                <View
-                  style={[
-                    s.row,
-                    {
-                      justifyContent: "flex-start",
-                      gap: 8,
-                      flexWrap: "wrap",
-                      marginBottom: 20,
-                    },
-                  ]}
-                >
-                  {[
-                    "All levels",
-                    ...grades,
-                    "Beginner",
-                    "Secondary",
-                    "University",
-                  ].map((l) => (
-                    <Pressable key={l} onPress={() => setLevel(l)}>
-                      <Text style={[s.small, level === l && s.link]}>{l} </Text>
-                    </Pressable>
-                  ))}
-                  <Pressable
-                    onPress={() =>
-                      setSort((v) => (v === "Newest" ? "Title A–Z" : "Newest"))
-                    }
-                  >
-                    <Text style={s.link}>{sort} ↕</Text>
-                  </Pressable>
+                    )}
+                  </View>
                 </View>
-                <View style={s.books}>
-                  {books.map((book) => (
-                    <BookCard key={book.id} book={book} />
-                  ))}
-                </View>
-                {books.length === 0 && (
-                  <Text style={s.empty}>
-                    No books match your search. Try another subject or title.
-                  </Text>
-                )}
-              </>
-            )}
-            {page === "Learning" && (
-              <>
-                <Heading
-                  eyebrow="LEARN WITH PURPOSE"
-                  title="Keep growing."
-                  subtitle="Practical lessons to help you find your rhythm."
-                />
                 <Pressable
                   accessibilityRole="button"
-                  accessibilityLabel="Explore language lessons"
-                  style={s.languageRow}
-                  onPress={() => go("Languages")}
+                  accessibilityLabel="Open your profile"
+                  onPress={() => go("Account", true)}
+                  style={s.avatar}
                 >
-                  <View style={s.quickIcon}>
-                    <Icon name="globe-outline" size={26} />
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={s.cardTitle}>Language learning</Text>
-                    <Text style={s.small}>French, Dutch & Spanish</Text>
-                  </View>
-                  <Icon name="chevron-forward" />
+                  <Text style={{ color: "#315542", fontWeight: "700" }}>
+                    {user?.email?.[0].toUpperCase() || "EF"}
+                  </Text>
                 </Pressable>
-                <View style={s.tiles}>
-                  {publicEntries
-                    .filter((e) => e.kind === "course")
-                    .map((e) => (
-                      <EntryCard key={e.id} entry={e} />
-                    ))}
-                </View>
-                <View style={s.card}>
-                  <Text style={s.cardTitle}>Teachers & tutors</Text>
-                  <Text style={s.muted}>
-                    Share your expertise. Submit educational lessons for
-                    administrator review.
-                  </Text>
-                  <Button
-                    label="Submit a lesson"
-                    onPress={() => openForm("course")}
+              </View>
+              <ScrollView
+                ref={scrollRef}
+                contentContainerStyle={s.main}
+                showsVerticalScrollIndicator={false}
+                keyboardShouldPersistTaps="handled"
+                keyboardDismissMode="on-drag"
+                automaticallyAdjustKeyboardInsets
+                refreshControl={
+                  <RefreshControl
+                    refreshing={refreshing}
+                    onRefresh={() => void pullToRefresh()}
+                    tintColor="#2c5744"
                   />
-                </View>
-              </>
-            )}
-            {page === "Languages" && (
-              <Languages
-                key={user?.id || "guest"}
-                userId={user?.id}
-                initialLanguage={languageStart}
-              />
-            )}
-            {["Classrooms", "Safe Room"].includes(page) && (
-              <SchoolFeatures
-                key={`${page}:${user?.id || "guest"}`}
-                page={page}
-                userId={user?.id}
-                admin={admin}
-                entries={publicEntries}
-                openEntry={setReader}
-                signIn={() => setAuth(true)}
-              />
-            )}
-            {page === "Opportunities" && (
-              <>
-                <Heading
-                  eyebrow="GO FURTHER, TOGETHER"
-                  title="Go further, together."
-                  subtitle="Student support and possibilities for a brighter future."
-                />
-                <View style={s.tiles}>
-                  <View style={[s.card, { backgroundColor: "#e9eee5" }]}>
-                    <Icon name="heart-outline" size={28} />
-                    <Text style={s.sectionHeading}>Helping Hands</Text>
-                    <Text style={s.muted}>
-                      Get support for tuition, books, and the essentials that
-                      keep you learning.
-                    </Text>
-                    <Button
-                      label="Apply for assistance"
-                      onPress={() => openForm("assistance")}
-                    />
-                  </View>
-                  <View style={[s.card, { backgroundColor: "#f4ecdc" }]}>
-                    <Icon name="bulb-outline" size={28} />
-                    <Text style={s.sectionHeading}>Supporting Hands</Text>
-                    <Text style={s.muted}>
-                      Bring a student-led project to life with guidance and
-                      funding.
-                    </Text>
-                    <Button
-                      label="Submit your idea"
-                      onPress={() => openForm("idea")}
-                    />
-                  </View>
-                </View>
-                <Text style={s.sectionHeading}>Meet the possibilities</Text>
-                <View style={s.tiles}>
-                  {publicEntries
-                    .filter((e) => ["assistance", "idea"].includes(e.kind))
-                    .map((e) => (
-                      <EntryCard key={e.id} entry={e} />
-                    ))}
-                </View>
-              </>
-            )}
-            {page === "Community" && (
-              <>
-                <Heading
-                  eyebrow="A LITTLE INSPIRATION"
-                  title="Video lessons"
-                  subtitle="Search approved lessons across all grades, subjects and titles."
-                  action={
-                    <Button
-                      label="Submit a video lesson"
-                      onPress={() => openForm("reel")}
-                    />
-                  }
-                />
-                <View style={s.card}>
-                  <Icon name="videocam-outline" size={35} />
-                  <Text style={s.cardTitle}>Learn by watching</Text>
-                  <TextInput
-                    accessibilityLabel="Search video lessons"
-                    placeholder="Search title, subject or grade"
-                    style={s.input}
-                    value={videoSearch}
-                    onChangeText={setVideoSearch}
-                  />
-                  <Text style={s.muted}>
-                    Approved student videos appear here. Keep it educational,
-                    respectful, and short.
-                  </Text>
-                </View>
-                {publicEntries
-                  .filter(
-                    (e) =>
-                      e.kind === "reel" &&
-                      (videoSearch.trim()
-                        ? `${e.title} ${e.category} ${e.level}`
-                            .toLowerCase()
-                            .includes(videoSearch.toLowerCase().trim())
-                        : matchesHomeGrade(e.level, grade)),
-                  )
-                  .map((e) => (
-                    <EntryCard key={e.id} entry={e} />
-                  ))}
-              </>
-            )}
-            {page === "Earnings" && (
-              <>
-                <Heading
-                  eyebrow="YOUR CONTRIBUTION MATTERS"
-                  title="Your earnings"
-                  subtitle="A clear view of your earnings and payouts."
-                />
-                <View style={s.stats}>
-                  {[
-                    "Pending earnings",
-                    "Approved earnings",
-                    "Available to withdraw",
-                  ].map((t) => (
-                    <View style={s.stat} key={t}>
-                      <View>
-                        <Text style={s.small}>{t}</Text>
-                        <Text style={s.heading}>—</Text>
+                }
+              >
+                {page === "Overview" && (
+                  <>
+                    <View style={s.greetingRow}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={s.eyebrow}>
+                          YOUR DAILY DOSE OF DISCOVERY
+                        </Text>
+                        <Text style={s.homeHeading}>
+                          What will you learn today?
+                        </Text>
                       </View>
+                      {!backend && (
+                        <View style={s.previewPill}>
+                          <Text style={s.previewText}>DEMO</Text>
+                        </View>
+                      )}
                     </View>
-                  ))}
-                </View>
-                <View style={s.card}>
-                  <Text style={s.cardTitle}>
-                    Monetization requires approval
-                  </Text>
-                  <Text style={s.muted}>
-                    Earnings are calculated from verified activity using
-                    administrator-managed rates. Live earnings and payouts are
-                    not connected in this build.
-                  </Text>
-                  <Button label="View account" onPress={() => go("Account")} />
-                </View>
-                <Text style={s.sectionHeading}>Transaction history</Text>
-                <Text style={s.empty}>No transactions to display.</Text>
-              </>
-            )}
-            {page === "Premier" && (
-              <>
-                <Plans notify={setNotice} />
-                <Heading
-                  eyebrow="EDUCATION FORUM PREMIER"
-                  title="Explore Premier"
-                  subtitle="More ways to learn, with benefits managed by the platform."
-                />
-                <View style={s.card}>
-                  <Icon name="sparkles-outline" size={32} />
-                  <Text style={s.sectionHeading}>
-                    Good things are taking shape.
-                  </Text>
-                  <Text style={s.muted}>
-                    Premier plans and prices will appear after the owner
-                    configures and activates them. No subscription is charged in
-                    this preview.
-                  </Text>
-                  <Button
-                    label="Explore free learning"
-                    onPress={() => go("Learning")}
-                  />
-                </View>
-              </>
-            )}
-            {page === "Account" && (
-              <>
-                <Heading
-                  eyebrow="YOUR SPACE"
-                  title={user?.email || "Welcome, curious mind."}
-                  subtitle={
-                    backend
-                      ? "Manage your account and submissions."
-                      : "Explore the app with a local demo profile."
-                  }
-                />
-                <View style={s.accountMenu}>
-                  {[
-                    {
-                      name: "Earnings",
-                      icon: "wallet-outline",
-                      label: "Earnings & payouts",
-                    },
-                    {
-                      name: "Premier",
-                      icon: "sparkles-outline",
-                      label: "Explore Premier",
-                    },
-                    {
-                      name: "Community",
-                      icon: "play-circle-outline",
-                      label: "Video lessons",
-                    },
-                  ]
-                    .filter(
-                      (item) => !coreEducationRelease || isCorePage(item.name),
-                    )
-                    .map((item) => (
+                    {!user && <AccountActions />}
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel="Search the library"
+                      style={s.homeSearch}
+                      onPress={() => go("Library", true)}
+                    >
+                      <Icon name="search-outline" color="#7b887d" />
+                      <Text style={s.searchHint}>
+                        Books, subjects, something new…
+                      </Text>
+                      <Icon name="options-outline" size={18} />
+                    </Pressable>
+                    <View style={s.quickActions}>
+                      {[
+                        {
+                          name: "Quiz",
+                          icon: "trophy-outline",
+                          label: "Guru quiz",
+                        },
+                        {
+                          name: "Notifications",
+                          icon: "notifications-outline",
+                          label: "Notifications",
+                        },
+                        {
+                          name: "Reels",
+                          icon: "play-circle-outline",
+                          label: "Share my talent",
+                        },
+                        {
+                          name: "Community",
+                          icon: "videocam-outline",
+                          label: "Video lessons",
+                        },
+                        {
+                          name: "Classrooms",
+                          icon: "people-outline",
+                          label: "Join classroom",
+                        },
+                        {
+                          name: "Safe Room",
+                          icon: "shield-checkmark-outline",
+                          label: "Safe Room",
+                        },
+                        {
+                          name: "Languages",
+                          icon: "globe-outline",
+                          label: "Languages",
+                        },
+                        {
+                          name: "Opportunities",
+                          icon: "heart-outline",
+                          label: "Student support",
+                        },
+                        {
+                          name: "Account",
+                          icon: "bookmark-outline",
+                          label: "Saved books",
+                        },
+                        {
+                          name: "Premier",
+                          icon: "sparkles-outline",
+                          label: "Premier",
+                        },
+                      ]
+                        .filter(
+                          (x) => !coreEducationRelease || isCorePage(x.name),
+                        )
+                        .map((x) => (
+                          <Pressable
+                            accessibilityRole="button"
+                            accessibilityLabel={x.label}
+                            key={x.name}
+                            onPress={() => go(x.name)}
+                            style={s.quickAction}
+                          >
+                            <View style={s.quickIcon}>
+                              <Icon name={x.icon as IconName} size={23} />
+                            </View>
+                            <Text style={s.quickLabel}>{x.label}</Text>
+                          </Pressable>
+                        ))}
+                    </View>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={
+                        homeEntries.some((e) => e.id === lastRead)
+                          ? "Continue reading"
+                          : "Explore the library"
+                      }
+                      style={s.continueCard}
+                      onPress={() => {
+                        const book = homeEntries.find((e) => e.id === lastRead);
+                        if (book) setReader(book);
+                        else go("Library", true);
+                      }}
+                    >
+                      <View style={{ flex: 1, gap: 9 }}>
+                        <Text style={s.continueEyebrow}>
+                          {homeEntries.some((e) => e.id === lastRead)
+                            ? "PICK UP WHERE YOU LEFT OFF"
+                            : "YOUR NEXT CHAPTER"}
+                        </Text>
+                        <Text numberOfLines={3} style={s.continueTitle}>
+                          {homeEntries.find((e) => e.id === lastRead)?.title ||
+                            "Big ideas start with a little curiosity."}
+                        </Text>
+                        <View style={s.continueAction}>
+                          <Text style={s.continueActionText}>
+                            {homeEntries.some((e) => e.id === lastRead)
+                              ? "Continue reading"
+                              : "Find your next read"}
+                          </Text>
+                          <Icon name="arrow-forward" size={17} color="#fff" />
+                        </View>
+                      </View>
+                      <View style={s.miniBook}>
+                        <Text style={s.miniBookTop}>EDUCATION FORUM</Text>
+                        <Icon name="leaf-outline" size={40} color="#3b5a3d" />
+                        <Text style={s.miniBookBottom}>STAY CURIOUS.</Text>
+                      </View>
+                    </Pressable>
+                    <View style={s.momentum}>
+                      <Icon name="sparkles-outline" size={19} color="#8e7839" />
+                      <Text style={s.momentumText}>
+                        {"Make a little time for a new idea."}
+                      </Text>
                       <Pressable
                         accessibilityRole="button"
-                        accessibilityLabel={item.label}
-                        key={item.name}
-                        onPress={() => go(item.name)}
-                        style={s.accountMenuRow}
+                        accessibilityLabel="Open learning"
+                        onPress={() => go("Learning", true)}
                       >
-                        <Icon name={item.icon as IconName} />
-                        <Text style={s.accountMenuLabel}>{item.label}</Text>
                         <Icon name="chevron-forward" size={18} />
                       </Pressable>
-                    ))}
-                </View>
-                {!user && <AccountActions />}
-                {backend ? (
-                  user && (
-                    <Button
-                      label="Sign out"
-                      onPress={() =>
-                        user
-                          ? void run(async () => {
-                              const { error } = await backend!.auth.signOut();
+                    </View>
+                    <View style={s.card}>
+                      <Text style={s.cardTitle}>
+                        {grade ? "Your home - " + grade : "Choose your grade"}
+                      </Text>
+                      <Text style={s.muted}>
+                        Home shows your grade, one below and one above. Search
+                        the library or videos to explore other grades.
+                      </Text>
+                      {grade && (!backend || user) && (
+                        <Button
+                          secondary
+                          label={
+                            editingGrade
+                              ? "Cancel grade change"
+                              : "Change grade"
+                          }
+                          onPress={() => setEditingGrade((v) => !v)}
+                        />
+                      )}
+                      {(!backend || user) && (!grade || editingGrade) && (
+                        <GradePicker
+                          value={grade}
+                          onChange={(g) => {
+                            if (!backend) {
+                              setGrade(g);
+                              setEditingGrade(false);
+                              return;
+                            }
+                            if (busy) return;
+                            const generation = authGeneration.current;
+                            void run(async () => {
+                              const { error } = await backend!.rpc(
+                                "set_my_grade",
+                                {
+                                  new_grade: g,
+                                },
+                              );
                               if (error) throw error;
-                            })
-                          : setAuth(true)
-                      }
-                    />
-                  )
-                ) : (
-                  <View style={s.card}>
-                    <Text style={s.cardTitle}>Preview mode</Text>
-                    <Text style={s.muted}>
-                      Your submissions, bookmarks, and progress are saved on
-                      this device. Sample administrator access only affects this
-                      preview.
-                    </Text>
-                    <Button
-                      label={
-                        demoAdmin
-                          ? "Leave admin preview"
-                          : "Explore admin preview"
-                      }
-                      onPress={() => {
-                        setDemoAdmin(!demoAdmin);
-                        if (!demoAdmin) go("Admin");
-                      }}
-                    />
-                  </View>
+                              if (generation === authGeneration.current) {
+                                setGrade(g);
+                                setEditingGrade(false);
+                              }
+                            });
+                          }}
+                        />
+                      )}
+                    </View>
+                    <View style={s.card}>
+                      <Text style={s.sectionHeading}>Video lessons</Text>
+                      <Text style={s.muted}>
+                        Discover the latest videos from our learning community.
+                      </Text>
+                      {publicEntries
+                        .filter((e) => e.kind === "reel")
+                        .slice(0, 4)
+                        .map((e) => (
+                          <EntryCard key={e.id} entry={e} />
+                        ))}
+                      {!publicEntries.some((e) => e.kind === "reel") && (
+                        <Text style={s.small}>
+                          No public videos yet. Share the first lesson or talent
+                          reel.
+                        </Text>
+                      )}
+                      <Button
+                        label="Search all video lessons"
+                        onPress={() => go("Community")}
+                      />
+                    </View>
+                    <View style={s.sectionTitle}>
+                      <Text style={s.sectionHeading}>Your next great read</Text>
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel="See all books"
+                        hitSlop={10}
+                        onPress={() => go("Library", true)}
+                      >
+                        <Text style={s.link}>See all</Text>
+                      </Pressable>
+                    </View>
+                    <ScrollView
+                      horizontal
+                      showsHorizontalScrollIndicator={false}
+                      contentContainerStyle={s.bookShelf}
+                    >
+                      {homeBooks.slice(0, 6).map((book) => (
+                        <BookCard key={book.id} book={book} shelf />
+                      ))}
+                    </ScrollView>
+                    <View style={s.sectionTitle}>
+                      <Text style={s.sectionHeading}>
+                        Say hello to a new language
+                      </Text>
+                    </View>
+                    {languages.map((l) => (
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel={`Start ${l.name}`}
+                        key={l.name}
+                        style={s.languageRow}
+                        onPress={() => {
+                          setLanguageStart(l.name);
+                          go("Languages");
+                        }}
+                      >
+                        <View style={s.flagTile}>
+                          <Text style={{ fontSize: 26 }}>{l.flag}</Text>
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text style={s.cardTitle}>{l.name}</Text>
+                          <Text style={s.small}>
+                            Beginner: four categories, starting with greetings
+                          </Text>
+                        </View>
+                        <Icon name="chevron-forward" color="#628158" />
+                      </Pressable>
+                    ))}
+                    {!backend && (
+                      <Text style={s.demoFootnote}>
+                        Demo content · No real payments
+                      </Text>
+                    )}
+                  </>
                 )}
-                {admin && (
-                  <Button
-                    label="Open admin dashboard"
-                    onPress={() => go("Admin")}
+                {page === "Library" && (
+                  <>
+                    <Heading
+                      eyebrow="THE EDUCATION LIBRARY"
+                      title="Your library"
+                      subtitle="Discover ideas worth spending time with."
+                      action={
+                        <Button
+                          label="+ Upload"
+                          onPress={() => openForm("book")}
+                        />
+                      }
+                    />
+                    <TextInput
+                      placeholderTextColor="#526477"
+                      accessibilityLabel="Search library"
+                      placeholder="Search books, subjects, or authors…"
+                      value={search}
+                      onChangeText={setSearch}
+                      style={s.search}
+                    />
+                    <ScrollView
+                      horizontal
+                      showsHorizontalScrollIndicator={false}
+                      style={{ marginBottom: 18 }}
+                    >
+                      {[
+                        "All subjects",
+                        "Science",
+                        "Mathematics",
+                        "Literature",
+                        "Technology",
+                      ].map((c) => (
+                        <Pressable
+                          key={c}
+                          onPress={() => setCategory(c)}
+                          style={[s.chip, category === c && s.chipActive]}
+                        >
+                          <Text
+                            style={{
+                              color: category === c ? "white" : "#51665a",
+                            }}
+                          >
+                            {c}
+                          </Text>
+                        </Pressable>
+                      ))}
+                    </ScrollView>
+                    <View
+                      style={[
+                        s.row,
+                        {
+                          justifyContent: "flex-start",
+                          gap: 8,
+                          flexWrap: "wrap",
+                          marginBottom: 20,
+                        },
+                      ]}
+                    >
+                      {[
+                        "All levels",
+                        ...grades,
+                        "Beginner",
+                        "Secondary",
+                        "University",
+                      ].map((l) => (
+                        <Pressable key={l} onPress={() => setLevel(l)}>
+                          <Text style={[s.small, level === l && s.link]}>
+                            {l}{" "}
+                          </Text>
+                        </Pressable>
+                      ))}
+                      <Pressable
+                        onPress={() =>
+                          setSort((v) =>
+                            v === "Newest" ? "Title A–Z" : "Newest",
+                          )
+                        }
+                      >
+                        <Text style={s.link}>{sort} ↕</Text>
+                      </Pressable>
+                    </View>
+                    <View style={s.books}>
+                      {books.map((book) => (
+                        <BookCard key={book.id} book={book} />
+                      ))}
+                    </View>
+                    {books.length === 0 && (
+                      <Text style={s.empty}>
+                        No books match your search. Try another subject or
+                        title.
+                      </Text>
+                    )}
+                  </>
+                )}
+                {page === "Learning" && (
+                  <>
+                    <Heading
+                      eyebrow="LEARN WITH PURPOSE"
+                      title="Keep growing."
+                      subtitle="Practical lessons to help you find your rhythm."
+                    />
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel="Explore language lessons"
+                      style={s.languageRow}
+                      onPress={() => go("Languages")}
+                    >
+                      <View style={s.quickIcon}>
+                        <Icon name="globe-outline" size={26} />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={s.cardTitle}>Language learning</Text>
+                        <Text style={s.small}>French, Dutch & Spanish</Text>
+                      </View>
+                      <Icon name="chevron-forward" />
+                    </Pressable>
+                    <View style={s.tiles}>
+                      {publicEntries
+                        .filter((e) => e.kind === "course")
+                        .map((e) => (
+                          <EntryCard key={e.id} entry={e} />
+                        ))}
+                    </View>
+                    <View style={s.card}>
+                      <Text style={s.cardTitle}>Teachers & tutors</Text>
+                      <Text style={s.muted}>
+                        Share your expertise. Submit educational lessons for
+                        administrator review.
+                      </Text>
+                      <Button
+                        label="Submit a lesson"
+                        onPress={() => openForm("course")}
+                      />
+                    </View>
+                  </>
+                )}
+                {page === "Languages" && (
+                  <Languages
+                    key={user?.id || "guest"}
+                    userId={user?.id}
+                    initialLanguage={languageStart}
                   />
                 )}
-                <Text style={s.sectionHeading}>My submissions</Text>
-                {[
-                  {
-                    label: "Privacy policy",
-                    url: process.env.EXPO_PUBLIC_PRIVACY_URL,
-                  },
-                  {
-                    label: "Terms of use",
-                    url: process.env.EXPO_PUBLIC_TERMS_URL,
-                  },
-                  {
-                    label: "Contact support",
-                    url: process.env.EXPO_PUBLIC_SUPPORT_URL,
-                  },
-                  {
-                    label: "Request account deletion",
-                    url: process.env.EXPO_PUBLIC_ACCOUNT_DELETION_URL,
-                  },
-                ]
-                  .filter((item) => !!item.url)
-                  .map((item) => (
+                {["Classrooms", "Safe Room"].includes(page) && (
+                  <SchoolFeatures
+                    key={`${page}:${user?.id || "guest"}`}
+                    page={page}
+                    userId={user?.id}
+                    admin={admin}
+                    entries={publicEntries}
+                    openEntry={setReader}
+                    signIn={() => setAuth(true)}
+                  />
+                )}
+                {page === "Opportunities" && (
+                  <>
+                    <Heading
+                      eyebrow="GO FURTHER, TOGETHER"
+                      title="Go further, together."
+                      subtitle="Student support and possibilities for a brighter future."
+                    />
+                    <View style={s.tiles}>
+                      <View style={[s.card, { backgroundColor: "#e9eee5" }]}>
+                        <Icon name="heart-outline" size={28} />
+                        <Text style={s.sectionHeading}>Helping Hands</Text>
+                        <Text style={s.muted}>
+                          Get support for tuition, books, and the essentials
+                          that keep you learning.
+                        </Text>
+                        <Button
+                          label="Apply for assistance"
+                          onPress={() => openForm("assistance")}
+                        />
+                      </View>
+                      <View style={[s.card, { backgroundColor: "#f4ecdc" }]}>
+                        <Icon name="bulb-outline" size={28} />
+                        <Text style={s.sectionHeading}>Supporting Hands</Text>
+                        <Text style={s.muted}>
+                          Bring a student-led project to life with guidance and
+                          funding.
+                        </Text>
+                        <Button
+                          label="Submit your idea"
+                          onPress={() => openForm("idea")}
+                        />
+                      </View>
+                    </View>
+                    <Text style={s.sectionHeading}>Meet the possibilities</Text>
+                    <View style={s.tiles}>
+                      {publicEntries
+                        .filter((e) => ["assistance", "idea"].includes(e.kind))
+                        .map((e) => (
+                          <EntryCard key={e.id} entry={e} />
+                        ))}
+                    </View>
+                  </>
+                )}
+                {page === "Quiz" && <Quiz userId={user?.id} />}
+                {page === "Notifications" && (
+                  <Notifications userId={user?.id} />
+                )}
+                {page === "Reels" && (
+                  <>
+                    <Heading
+                      eyebrow="SHARE MY TALENT"
+                      title="Student spotlight"
+                      subtitle="Scroll through talent from our community."
+                    />
                     <Button
-                      key={item.label}
+                      label="Share my talent"
+                      onPress={() => {
+                        openForm("reel");
+                        setVideoFormat("talent");
+                      }}
+                    />
+                    {publicEntries
+                      .filter(
+                        (e) => e.kind === "reel" && e.video_format === "talent",
+                      )
+                      .map((e, index) => (
+                        <View key={e.id} style={s.card}>
+                          <Text style={s.cardTitle}>{e.title}</Text>
+                          {e.file_path && (
+                            <LessonVideo
+                              entryId={e.id}
+                              path={e.file_path}
+                              userId={user?.id}
+                            />
+                          )}
+                          <EntryCard entry={e} />
+                          <VideoSocial
+                            entryId={e.id}
+                            userId={user?.id}
+                            moderator={admin || moderator}
+                          />
+                          {(index + 1) % 5 === 0 && <ReelAd />}
+                        </View>
+                      ))}
+                  </>
+                )}
+                {page === "Community" && (
+                  <>
+                    <Heading
+                      eyebrow="A LITTLE INSPIRATION"
+                      title="All videos"
+                      subtitle="Search lessons and talent reels across all grades, subjects and titles."
+                      action={
+                        <Button
+                          label="Submit a video lesson"
+                          onPress={() => openForm("reel")}
+                        />
+                      }
+                    />
+                    <View style={s.card}>
+                      <Icon name="videocam-outline" size={35} />
+                      <Text style={s.cardTitle}>Learn by watching</Text>
+                      <TextInput
+                        placeholderTextColor="#526477"
+                        accessibilityLabel="Search video lessons"
+                        placeholder="Search title, subject or grade"
+                        style={s.input}
+                        value={videoSearch}
+                        onChangeText={setVideoSearch}
+                      />
+                      <Text style={s.muted}>
+                        Reviewed lessons and instantly published talent reels
+                        appear here. Keep contributions educational and
+                        respectful.
+                      </Text>
+                    </View>
+                    {publicEntries
+                      .filter(
+                        (e) =>
+                          e.kind === "reel" &&
+                          (videoSearch.trim()
+                            ? `${e.title} ${e.category} ${e.level}`
+                                .toLowerCase()
+                                .includes(videoSearch.toLowerCase().trim())
+                            : true),
+                      )
+                      .map((e) => (
+                        <EntryCard key={e.id} entry={e} />
+                      ))}
+                  </>
+                )}
+                {page === "Earnings" && (
+                  <>
+                    <Heading
+                      eyebrow="YOUR CONTRIBUTION MATTERS"
+                      title="Your earnings"
+                      subtitle="A clear view of your earnings and payouts."
+                    />
+                    <View style={s.stats}>
+                      {[
+                        "Pending earnings",
+                        "Approved earnings",
+                        "Available to withdraw",
+                      ].map((t) => (
+                        <View style={s.stat} key={t}>
+                          <View>
+                            <Text style={s.small}>{t}</Text>
+                            <Text style={s.heading}>—</Text>
+                          </View>
+                        </View>
+                      ))}
+                    </View>
+                    <View style={s.card}>
+                      <Text style={s.cardTitle}>
+                        Monetization requires approval
+                      </Text>
+                      <Text style={s.muted}>
+                        Earnings are calculated from verified activity using
+                        administrator-managed rates. Live earnings and payouts
+                        are not connected in this build.
+                      </Text>
+                      <Button
+                        label="View account"
+                        onPress={() => go("Account")}
+                      />
+                    </View>
+                    <Text style={s.sectionHeading}>Transaction history</Text>
+                    <Text style={s.empty}>No transactions to display.</Text>
+                  </>
+                )}
+                {page === "Premier" && (
+                  <>
+                    <Plans notify={setNotice} />
+                    <Heading
+                      eyebrow="EDUCATION FORUM PREMIER"
+                      title="Explore Premier"
+                      subtitle="More ways to learn, with benefits managed by the platform."
+                    />
+                    <View style={s.card}>
+                      <Icon name="sparkles-outline" size={32} />
+                      <Text style={s.sectionHeading}>
+                        Good things are taking shape.
+                      </Text>
+                      <Text style={s.muted}>
+                        Premier plans and prices will appear after the owner
+                        configures and activates them. No subscription is
+                        charged in this preview.
+                      </Text>
+                      <Button
+                        label="Explore free learning"
+                        onPress={() => go("Learning")}
+                      />
+                    </View>
+                  </>
+                )}
+                {page === "Account" && (
+                  <>
+                    <Heading
+                      eyebrow="YOUR SPACE"
+                      title={user?.email || "Welcome, curious mind."}
+                      subtitle={
+                        backend
+                          ? "Manage your account and submissions."
+                          : "Explore the app with a local demo profile."
+                      }
+                    />
+                    <View style={s.accountMenu}>
+                      {[
+                        {
+                          name: "Earnings",
+                          icon: "wallet-outline",
+                          label: "Earnings & payouts",
+                        },
+                        {
+                          name: "Premier",
+                          icon: "sparkles-outline",
+                          label: "Explore Premier",
+                        },
+                        {
+                          name: "Community",
+                          icon: "play-circle-outline",
+                          label: "Video lessons",
+                        },
+                      ]
+                        .filter(
+                          (item) =>
+                            !coreEducationRelease || isCorePage(item.name),
+                        )
+                        .map((item) => (
+                          <Pressable
+                            accessibilityRole="button"
+                            accessibilityLabel={item.label}
+                            key={item.name}
+                            onPress={() => go(item.name)}
+                            style={s.accountMenuRow}
+                          >
+                            <Icon name={item.icon as IconName} />
+                            <Text style={s.accountMenuLabel}>{item.label}</Text>
+                            <Icon name="chevron-forward" size={18} />
+                          </Pressable>
+                        ))}
+                    </View>
+                    {!user && <AccountActions />}
+                    {backend ? (
+                      user && (
+                        <Button
+                          label="Sign out"
+                          onPress={() =>
+                            user
+                              ? void run(async () => {
+                                  await disablePush();
+                                  const { error } =
+                                    await backend!.auth.signOut();
+                                  if (error) throw error;
+                                })
+                              : setAuth(true)
+                          }
+                        />
+                      )
+                    ) : (
+                      <View style={s.card}>
+                        <Text style={s.cardTitle}>Preview mode</Text>
+                        <Text style={s.muted}>
+                          Your submissions, bookmarks, and progress are saved on
+                          this device. Sample administrator access only affects
+                          this preview.
+                        </Text>
+                        <Button
+                          label={
+                            demoAdmin
+                              ? "Leave admin preview"
+                              : "Explore admin preview"
+                          }
+                          onPress={() => {
+                            setDemoAdmin(!demoAdmin);
+                            if (!demoAdmin) go("Admin");
+                          }}
+                        />
+                      </View>
+                    )}
+                    {(admin || moderator) && (
+                      <Button
+                        label={
+                          admin
+                            ? "Open admin dashboard"
+                            : "Open moderator dashboard"
+                        }
+                        onPress={() => go("Admin")}
+                      />
+                    )}
+                    <PurchaseSettings userId={user?.id} />
+                    <AdPrivacy />
+                    <PushSettings userId={user?.id} />
+                    <CreatorEarnings
+                      key={user?.id || "guest"}
+                      userId={user?.id}
+                    />
+                    <EarningRates />
+                    <Text style={s.sectionHeading}>My submissions</Text>
+                    {[
+                      {
+                        label: "Privacy policy",
+                        url: process.env.EXPO_PUBLIC_PRIVACY_URL,
+                      },
+                      {
+                        label: "Terms of use",
+                        url: process.env.EXPO_PUBLIC_TERMS_URL,
+                      },
+                      {
+                        label: "Contact support",
+                        url: process.env.EXPO_PUBLIC_SUPPORT_URL,
+                      },
+                      {
+                        label: "Request account deletion",
+                        url: process.env.EXPO_PUBLIC_ACCOUNT_DELETION_URL,
+                      },
+                    ]
+                      .filter((item) => !!item.url)
+                      .map((item) => (
+                        <Button
+                          key={item.label}
+                          secondary
+                          label={item.label}
+                          onPress={() =>
+                            void run(async () => {
+                              await Linking.openURL(item.url!);
+                            })
+                          }
+                        />
+                      ))}
+                    {entries
+                      .filter(
+                        (e) =>
+                          e.owner_id === (user?.id || "demo") &&
+                          !initialEntries.some((x) => x.id === e.id),
+                      )
+                      .map((e) => (
+                        <View style={s.card} key={e.id}>
+                          <Text style={s.tag}>
+                            {e.status.replace("_", " ")}
+                          </Text>
+                          <Text style={s.cardTitle}>{e.title}</Text>
+                          <Text style={s.small}>
+                            {e.kind} ·{" "}
+                            {new Date(e.created_at).toLocaleDateString()}
+                          </Text>
+                        </View>
+                      ))}
+                    <Text style={s.sectionHeading}>Saved for later</Text>
+                    {saved.length === 0 && (
+                      <Text style={s.empty}>
+                        Tap the bookmark on a book to keep it here.
+                      </Text>
+                    )}
+                    {entries
+                      .filter(
+                        (e) => saved.includes(e.id) && e.status === "approved",
+                      )
+                      .map((e) => (
+                        <Pressable
+                          key={e.id}
+                          style={s.card}
+                          onPress={() => setReader(e)}
+                        >
+                          <Text style={s.cardTitle}>{e.title}</Text>
+                          <Text style={s.link}>Continue reading →</Text>
+                        </Pressable>
+                      ))}
+                  </>
+                )}
+                {page === "Admin" && (admin || moderator) && (
+                  <>
+                    <Heading
+                      eyebrow="ADMINISTRATION"
+                      title="A thoughtful space needs care."
+                      subtitle="Review submissions before they become public."
+                    />
+                    <TextInput
+                      placeholderTextColor="#526477"
+                      style={s.input}
+                      accessibilityLabel="Review reason"
+                      placeholder="Decision reason (required for audit history)"
+                      value={reviewReason}
+                      onChangeText={setReviewReason}
+                    />
+                    {entries.filter(
+                      (e) =>
+                        e.status === "pending" ||
+                        e.status === "changes_requested",
+                    ).length === 0 && (
+                      <Text style={s.empty}>Your review queue is clear.</Text>
+                    )}
+                    {entries
+                      .filter(
+                        (e) =>
+                          e.status === "pending" ||
+                          e.status === "changes_requested",
+                      )
+                      .map((e) => (
+                        <View style={s.card} key={e.id}>
+                          <Text style={s.tag}>
+                            {e.kind} · {e.status}
+                          </Text>
+                          <Text style={s.cardTitle}>{e.title}</Text>
+                          <Text style={s.muted}>{e.description}</Text>
+                          <Text style={s.small}>
+                            Submitted by {e.author} ·{" "}
+                            {new Date(e.created_at).toLocaleDateString()}
+                          </Text>
+                          <Button
+                            secondary
+                            label="Preview submission"
+                            onPress={() => setReader(e)}
+                          />
+                          <View style={[s.row, { flexWrap: "wrap", gap: 8 }]}>
+                            <Button
+                              label="Approve"
+                              onPress={() => void decide(e, "approved")}
+                            />
+                            <Button
+                              secondary
+                              label="Request changes"
+                              onPress={() =>
+                                void decide(e, "changes_requested")
+                              }
+                            />
+                            <Button
+                              secondary
+                              label="Reject"
+                              onPress={() => void decide(e, "rejected")}
+                            />
+                          </View>
+                        </View>
+                      ))}
+                    <Text style={s.sectionHeading}>Published content</Text>
+                    {publicEntries.map((e) => (
+                      <View style={s.card} key={e.id}>
+                        <Text style={s.cardTitle}>{e.title}</Text>
+                        <Button
+                          secondary
+                          label="Remove from public view"
+                          onPress={() => void decide(e, "removed")}
+                        />
+                      </View>
+                    ))}
+                    {admin && (
+                      <>
+                        <Management notify={setNotice} />
+                        <ServiceAdministration />
+                      </>
+                    )}
+                    <Text style={s.sectionHeading}>
+                      Preview decision history
+                    </Text>
+                    {history.map((h) => (
+                      <Text style={s.muted} key={h.id}>
+                        {h.action} · {h.reason} ·{" "}
+                        {new Date(h.created_at).toLocaleString()}
+                      </Text>
+                    ))}
+                    {!coreEducationRelease && (
+                      <View style={s.card}>
+                        <Text style={s.cardTitle}>Financial configuration</Text>
+                        <Text style={s.muted}>
+                          The database includes protected plans, feature rules,
+                          earnings policies, transactions, and funding
+                          agreements. Provider integrations, verified activity
+                          processing, and financial disbursement workflows
+                          remain to be implemented.
+                        </Text>
+                      </View>
+                    )}
+                  </>
+                )}
+              </ScrollView>
+              {!reader && !form && !auth && <BottomBanner />}
+              <View
+                accessibilityRole="tablist"
+                style={[
+                  s.bottomNav,
+                  { paddingBottom: Math.max(insets.bottom, 8) },
+                ]}
+              >
+                {tabs
+                  .filter(
+                    (tab) => !coreEducationRelease || isCorePage(tab.name),
+                  )
+                  .map((tab) => {
+                    const selected = parentTab(page) === tab.name;
+                    return (
+                      <Pressable
+                        accessibilityRole="tab"
+                        accessibilityLabel={tab.label}
+                        accessibilityState={{ selected }}
+                        aria-selected={selected}
+                        key={tab.name}
+                        onPress={() => go(tab.name, true)}
+                        style={s.mobileNav}
+                      >
+                        <View style={[s.tabIcon, selected && s.tabIconActive]}>
+                          <Icon
+                            name={selected ? tab.selectedIcon : tab.icon}
+                            color={selected ? "#28513e" : "#89938a"}
+                            size={22}
+                          />
+                        </View>
+                        <Text
+                          style={[s.tabLabel, selected && s.tabLabelActive]}
+                        >
+                          {tab.label}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+              </View>
+            </View>
+          </View>
+          <Modal
+            visible={!!reader}
+            animationType="slide"
+            onRequestClose={() => setReader(null)}
+          >
+            <SafeAreaView style={s.safe}>
+              <ScrollView
+                contentContainerStyle={s.modalContent}
+                automaticallyAdjustKeyboardInsets
+                keyboardShouldPersistTaps="handled"
+              >
+                <Button
+                  secondary
+                  label="← Back to discovery"
+                  onPress={() => setReader(null)}
+                />
+                {!!notice && !!reader && (
+                  <Text accessibilityRole="alert" style={s.inlineNotice}>
+                    {notice}
+                  </Text>
+                )}
+                {reader && (
+                  <>
+                    <Text style={s.eyebrow}>
+                      {reader.category} / {reader.level}
+                    </Text>
+                    <Text style={s.heading}>{reader.title}</Text>
+                    <Text style={s.muted}>By {reader.author}</Text>
+                    <Button
+                      label="Share"
                       secondary
-                      label={item.label}
+                      onPress={() =>
+                        void Share.share({
+                          message: `${reader.title} — ${reader.description.slice(0, 120)}`,
+                        }).catch(() =>
+                          setNotice("Sharing was unavailable. Please retry."),
+                        )
+                      }
+                    />
+                    <Text style={s.reading}>{reader.description}</Text>
+                    {reader.kind === "reel" && reader.file_path && (
+                      <>
+                        {reader.video_format !== "talent" && <LessonAdOffer />}
+                        <LessonVideo
+                          entryId={reader.id}
+                          path={reader.file_path}
+                          userId={user?.id}
+                        />
+                        <VideoSocial
+                          entryId={reader.id}
+                          userId={user?.id}
+                          moderator={admin || moderator}
+                        />
+                      </>
+                    )}
+                    {reader.file_path && reader.kind !== "reel" && (
+                      <Button
+                        label="Open attached file"
+                        onPress={() =>
+                          void run(async () => {
+                            if (!backend) {
+                              await Linking.openURL(reader.file_path!);
+                              return;
+                            }
+                            if (!user)
+                              throw new Error(
+                                "Sign in to open attached files.",
+                              );
+                            const { data, error } = await backend.storage
+                              .from("submissions")
+                              .createSignedUrl(reader.file_path!, 60);
+                            if (error) throw error;
+                            await Linking.openURL(data.signedUrl);
+                          })
+                        }
+                      />
+                    )}
+                    <Button
+                      secondary
+                      label={
+                        saved.includes(reader.id)
+                          ? "Remove bookmark"
+                          : "Save for later"
+                      }
+                      onPress={() => toggleSaved(reader.id)}
+                    />
+                    {["assistance", "idea"].includes(reader.kind) && (
+                      <Button
+                        label="Support this initiative"
+                        onPress={() =>
+                          setNotice(
+                            "Donations are not enabled yet. No money has been charged.",
+                          )
+                        }
+                      />
+                    )}
+                    <Button
+                      secondary
+                      label="Report this content"
                       onPress={() =>
                         void run(async () => {
-                          await Linking.openURL(item.url!);
+                          if (backend) {
+                            if (!user)
+                              throw new Error("Sign in to submit a report.");
+                            const { error } = await backend
+                              .from("reports")
+                              .insert({
+                                entry_id: reader.id,
+                                reporter_id: user.id,
+                                reason: "User requested a content review",
+                              });
+                            if (error) throw error;
+                          }
+                          setNotice(
+                            backend
+                              ? "Report submitted to the moderation team."
+                              : "Demo report recorded. No live moderation team is connected.",
+                          );
                         })
                       }
                     />
-                  ))}
-                {entries
-                  .filter(
-                    (e) =>
-                      e.owner_id === (user?.id || "demo") &&
-                      !initialEntries.some((x) => x.id === e.id),
-                  )
-                  .map((e) => (
-                    <View style={s.card} key={e.id}>
-                      <Text style={s.tag}>{e.status.replace("_", " ")}</Text>
-                      <Text style={s.cardTitle}>{e.title}</Text>
-                      <Text style={s.small}>
-                        {e.kind} · {new Date(e.created_at).toLocaleDateString()}
-                      </Text>
-                    </View>
-                  ))}
-                <Text style={s.sectionHeading}>Saved for later</Text>
-                {saved.length === 0 && (
-                  <Text style={s.empty}>
-                    Tap the bookmark on a book to keep it here.
+                  </>
+                )}
+              </ScrollView>
+              <BottomBanner />
+            </SafeAreaView>
+          </Modal>
+          <Modal
+            visible={!!form}
+            presentationStyle="pageSheet"
+            allowSwipeDismissal
+            animationType="slide"
+            onRequestClose={() => setForm(null)}
+          >
+            <SafeAreaView style={s.safe}>
+              <ScrollView
+                contentContainerStyle={s.modalContent}
+                keyboardShouldPersistTaps="handled"
+                automaticallyAdjustKeyboardInsets
+              >
+                {!!notice && !!form && (
+                  <Text accessibilityRole="alert" style={s.inlineNotice}>
+                    {notice}
                   </Text>
                 )}
-                {entries
-                  .filter(
-                    (e) => saved.includes(e.id) && e.status === "approved",
-                  )
-                  .map((e) => (
-                    <Pressable
-                      key={e.id}
-                      style={s.card}
-                      onPress={() => setReader(e)}
-                    >
-                      <Text style={s.cardTitle}>{e.title}</Text>
-                      <Text style={s.link}>Continue reading →</Text>
-                    </Pressable>
-                  ))}
-              </>
-            )}
-            {page === "Admin" && admin && (
-              <>
-                <Heading
-                  eyebrow="ADMINISTRATION"
-                  title="A thoughtful space needs care."
-                  subtitle="Review submissions before they become public."
+                <Button
+                  secondary
+                  label="← Cancel"
+                  onPress={() => setForm(null)}
                 />
-                <TextInput
-                  style={s.input}
-                  accessibilityLabel="Review reason"
-                  placeholder="Decision reason (required for audit history)"
-                  value={reviewReason}
-                  onChangeText={setReviewReason}
-                />
-                {entries.filter(
-                  (e) =>
-                    e.status === "pending" || e.status === "changes_requested",
-                ).length === 0 && (
-                  <Text style={s.empty}>Your review queue is clear.</Text>
-                )}
-                {entries
-                  .filter(
-                    (e) =>
-                      e.status === "pending" ||
-                      e.status === "changes_requested",
-                  )
-                  .map((e) => (
-                    <View style={s.card} key={e.id}>
-                      <Text style={s.tag}>
-                        {e.kind} · {e.status}
-                      </Text>
-                      <Text style={s.cardTitle}>{e.title}</Text>
-                      <Text style={s.muted}>{e.description}</Text>
-                      <Text style={s.small}>
-                        Submitted by {e.author} ·{" "}
-                        {new Date(e.created_at).toLocaleDateString()}
-                      </Text>
-                      <Button
-                        secondary
-                        label="Preview submission"
-                        onPress={() => setReader(e)}
-                      />
-                      <View style={[s.row, { flexWrap: "wrap", gap: 8 }]}>
-                        <Button
-                          label="Approve"
-                          onPress={() => void decide(e, "approved")}
-                        />
-                        <Button
-                          secondary
-                          label="Request changes"
-                          onPress={() => void decide(e, "changes_requested")}
-                        />
-                        <Button
-                          secondary
-                          label="Reject"
-                          onPress={() => void decide(e, "rejected")}
-                        />
-                      </View>
-                    </View>
-                  ))}
-                <Text style={s.sectionHeading}>Published content</Text>
-                {publicEntries.map((e) => (
-                  <View style={s.card} key={e.id}>
-                    <Text style={s.cardTitle}>{e.title}</Text>
+                <Text style={s.heading}>
+                  {form === "book"
+                    ? "Share a good read."
+                    : form === "idea"
+                      ? "Start something meaningful."
+                      : form === "assistance"
+                        ? "Let’s take the next step."
+                        : "Share your knowledge."}
+                </Text>
+                <Text style={s.muted}>
+                  Lessons and documents start privately. A reviewer checks them
+                  before publication. Keep sensitive personal information out of
+                  the public description.
+                </Text>
+                <Text style={s.label}>Resource grade</Text>
+                {form === "reel" && (
+                  <View style={s.card}>
+                    <Text style={s.label}>Video type</Text>
                     <Button
-                      secondary
-                      label="Remove from public view"
-                      onPress={() => void decide(e, "removed")}
+                      label="Long video lesson ? review first"
+                      secondary={videoFormat !== "lesson"}
+                      onPress={() => setVideoFormat("lesson")}
+                    />
+                    <Button
+                      label="Short talent reel ? publish instantly"
+                      secondary={videoFormat !== "talent"}
+                      onPress={() => setVideoFormat("talent")}
+                    />
+                  </View>
+                )}
+                <Text style={s.muted}>
+                  Share original slides, answer sheets, question papers and
+                  lessons. See published earning rates in your account.
+                </Text>
+                <GradePicker
+                  value={submissionGrade}
+                  onChange={setSubmissionGrade}
+                />
+                {[
+                  { label: "Title", value: title, set: setTitle },
+                  {
+                    label: "Public description / purpose",
+                    value: description,
+                    set: setDescription,
+                  },
+                  {
+                    label: "Subject or category",
+                    value: subject,
+                    set: setSubject,
+                  },
+                  {
+                    label: "Author / public display name",
+                    value: author,
+                    set: setAuthor,
+                  },
+                ].map((f) => (
+                  <View key={f.label}>
+                    <Text style={s.label}>{f.label}</Text>
+                    <TextInput
+                      placeholderTextColor="#526477"
+                      accessibilityLabel={f.label}
+                      style={[
+                        s.input,
+                        f.label.includes("description") && {
+                          height: 140,
+                          textAlignVertical: "top",
+                        },
+                      ]}
+                      value={f.value}
+                      onChangeText={f.set}
+                      multiline={f.label.includes("description")}
                     />
                   </View>
                 ))}
-                <Management notify={setNotice} />
-                <Text style={s.sectionHeading}>Preview decision history</Text>
-                {history.map((h) => (
-                  <Text style={s.muted} key={h.id}>
-                    {h.action} · {h.reason} ·{" "}
-                    {new Date(h.created_at).toLocaleString()}
+                <Button
+                  secondary
+                  label={
+                    attachment
+                      ? `Attached: ${attachment.name}`
+                      : form === "reel"
+                        ? "Attach a video"
+                        : "Attach a PDF"
+                  }
+                  onPress={() =>
+                    void run(async () => {
+                      const r = await DocumentPicker.getDocumentAsync({
+                        type:
+                          form === "reel"
+                            ? ["video/mp4", "video/quicktime"]
+                            : "application/pdf",
+                        copyToCacheDirectory: true,
+                      });
+                      if (!r.canceled) {
+                        if ((r.assets[0].size || 0) > 20 * 1024 * 1024)
+                          throw new Error(
+                            "Please choose a file smaller than 20 MB.",
+                          );
+                        setAttachment(r.assets[0]);
+                      }
+                    })
+                  }
+                />
+                <Button
+                  label={busy ? "Submitting…" : "Submit for review"}
+                  onPress={() => {
+                    if (!busy) void submit();
+                  }}
+                />
+              </ScrollView>
+              <BottomBanner />
+            </SafeAreaView>
+          </Modal>
+          <Modal
+            visible={auth}
+            animationType="slide"
+            onRequestClose={() => setAuth(false)}
+          >
+            <SafeAreaView style={s.safe}>
+              <ScrollView
+                contentContainerStyle={s.modalContent}
+                keyboardShouldPersistTaps="handled"
+                automaticallyAdjustKeyboardInsets
+              >
+                {!!notice && auth && (
+                  <Text accessibilityRole="alert" style={s.inlineNotice}>
+                    {notice}
                   </Text>
-                ))}
-                {!coreEducationRelease && (
-                  <View style={s.card}>
-                    <Text style={s.cardTitle}>Financial configuration</Text>
-                    <Text style={s.muted}>
-                      The database includes protected plans, feature rules,
-                      earnings policies, transactions, and funding agreements.
-                      Provider integrations, verified activity processing, and
-                      financial disbursement workflows remain to be implemented.
-                    </Text>
+                )}
+                <Button
+                  secondary
+                  label="← Back"
+                  onPress={() => setAuth(false)}
+                />
+                <Text style={s.heading}>
+                  {recovery
+                    ? "Choose a new password"
+                    : signup
+                      ? "Create your account"
+                      : "Welcome back."}
+                </Text>
+                {!backend && (
+                  <Text style={s.inlineNotice}>
+                    Account registration and login are not available in this
+                    preview. You can still explore learning and the library.
+                  </Text>
+                )}
+                <TextInput
+                  placeholderTextColor="#526477"
+                  style={s.input}
+                  placeholder="Email address"
+                  accessibilityLabel="Email"
+                  autoCapitalize="none"
+                  keyboardType="email-address"
+                  value={email}
+                  onChangeText={setEmail}
+                />
+                <TextInput
+                  placeholderTextColor="#526477"
+                  style={s.input}
+                  placeholder="Password (at least 8 characters)"
+                  accessibilityLabel="Password"
+                  secureTextEntry
+                  value={password}
+                  onChangeText={setPassword}
+                />
+                {signup && !recovery && (
+                  <TextInput
+                    placeholderTextColor="#526477"
+                    accessibilityLabel="Confirm password"
+                    placeholder="Confirm password"
+                    style={s.input}
+                    secureTextEntry
+                    value={confirmation}
+                    onChangeText={setConfirmation}
+                  />
+                )}
+                {signup && !recovery && (
+                  <View style={{ gap: 12 }}>
+                    {[
+                      ["Name", firstName, setFirstName],
+                      ["Surname", surname, setSurname],
+                      ["Date of birth (YYYY-MM-DD)", birthDate, setBirthDate],
+                      ["Country", country, setCountry],
+                    ].map(([label, value, setter]) => (
+                      <TextInput
+                        key={label as string}
+                        accessibilityLabel={label as string}
+                        placeholder={label as string}
+                        placeholderTextColor="#526477"
+                        style={s.input}
+                        value={value as string}
+                        onChangeText={setter as (v: string) => void}
+                      />
+                    ))}
+                    <Text style={s.label}>I am a {accountType}</Text>
+                    <View style={s.row}>
+                      {["student", "teacher"].map((type) => (
+                        <Button
+                          key={type}
+                          label={type === "teacher" ? "Teacher" : "Student"}
+                          secondary={accountType !== type}
+                          onPress={() => setAccountType(type)}
+                        />
+                      ))}
+                    </View>
+                    <Text style={s.label}>Your grade</Text>
+                    <GradePicker
+                      value={signupGrade}
+                      onChange={setSignupGrade}
+                    />
                   </View>
                 )}
-              </>
-            )}
-          </ScrollView>
-          <View
-            accessibilityRole="tablist"
-            style={[s.bottomNav, { paddingBottom: Math.max(insets.bottom, 8) }]}
-          >
-            {tabs
-              .filter((tab) => !coreEducationRelease || isCorePage(tab.name))
-              .map((tab) => {
-                const selected = parentTab(page) === tab.name;
-                return (
-                  <Pressable
-                    accessibilityRole="tab"
-                    accessibilityLabel={tab.label}
-                    accessibilityState={{ selected }}
-                    aria-selected={selected}
-                    key={tab.name}
-                    onPress={() => go(tab.name, true)}
-                    style={s.mobileNav}
-                  >
-                    <View style={[s.tabIcon, selected && s.tabIconActive]}>
-                      <Icon
-                        name={selected ? tab.selectedIcon : tab.icon}
-                        color={selected ? "#28513e" : "#89938a"}
-                        size={22}
-                      />
-                    </View>
-                    <Text style={[s.tabLabel, selected && s.tabLabelActive]}>
-                      {tab.label}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-          </View>
-        </View>
-      </View>
-      <Modal
-        visible={!!reader}
-        animationType="slide"
-        onRequestClose={() => setReader(null)}
-      >
-        <SafeAreaView style={s.safe}>
-          <ScrollView
-            contentContainerStyle={s.modalContent}
-            automaticallyAdjustKeyboardInsets
-            keyboardShouldPersistTaps="handled"
-          >
-            <Button
-              secondary
-              label="← Back to discovery"
-              onPress={() => setReader(null)}
-            />
-            {!!notice && !!reader && (
-              <Text accessibilityRole="alert" style={s.inlineNotice}>
-                {notice}
-              </Text>
-            )}
-            {reader && (
-              <>
-                <Text style={s.eyebrow}>
-                  {reader.category} / {reader.level}
-                </Text>
-                <Text style={s.heading}>{reader.title}</Text>
-                <Text style={s.muted}>By {reader.author}</Text>
-                <Text style={s.reading}>{reader.description}</Text>
-                {reader.kind === "reel" && reader.file_path && (
-                  <LessonVideo path={reader.file_path} userId={user?.id} />
-                )}
-                {reader.file_path && reader.kind !== "reel" && (
-                  <Button
-                    label="Open attached file"
-                    onPress={() =>
+                <Button
+                  label={
+                    busy
+                      ? "Please wait…"
+                      : recovery
+                        ? "Update password"
+                        : signup
+                          ? "Create account"
+                          : "Sign in"
+                  }
+                  onPress={() => {
+                    if (!busy)
                       void run(async () => {
-                        if (!backend) {
-                          await Linking.openURL(reader.file_path!);
+                        if (recovery && password.length < 8)
+                          throw new Error(
+                            "Use at least 8 characters for your password.",
+                          );
+                        if (signup && !recovery) {
+                          if (
+                            !firstName.trim() ||
+                            !surname.trim() ||
+                            !country.trim()
+                          )
+                            throw new Error(
+                              "Enter your name, surname and country.",
+                            );
+                          const dob = new Date(birthDate);
+                          if (
+                            !/^\d{4}-\d{2}-\d{2}$/.test(birthDate) ||
+                            !Number.isFinite(dob.getTime()) ||
+                            dob.toISOString().slice(0, 10) !== birthDate ||
+                            dob > new Date()
+                          )
+                            throw new Error(
+                              "Enter a valid date of birth as YYYY-MM-DD.",
+                            );
+                        }
+                        const normalizedEmail = recovery
+                          ? email.trim()
+                          : validateAccountForm({
+                              email,
+                              password,
+                              confirmation,
+                              signup,
+                              grade: signupGrade,
+                            });
+                        if (!backend)
+                          throw new Error(
+                            "Account service is not connected yet. No account has been created.",
+                          );
+                        if (recovery) {
+                          const { error } = await backend!.auth.updateUser({
+                            password,
+                          });
+                          if (error) throw error;
+                          setRecovery(false);
+                          setPassword("");
+                          setAuth(false);
+                          setNotice("Your password has been updated.");
                           return;
                         }
-                        if (!user)
-                          throw new Error("Sign in to open attached files.");
-                        const { data, error } = await backend.storage
-                          .from("submissions")
-                          .createSignedUrl(reader.file_path!, 60);
+                        const { data, error } = signup
+                          ? await backend!.auth.signUp({
+                              email: normalizedEmail,
+                              password,
+                              options: {
+                                emailRedirectTo: authRedirect,
+                                data: {
+                                  grade: signupGrade,
+                                  first_name: firstName.trim(),
+                                  surname: surname.trim(),
+                                  date_of_birth: birthDate,
+                                  country: country.trim(),
+                                  account_type: accountType,
+                                },
+                              },
+                            })
+                          : await backend!.auth.signInWithPassword({
+                              email: normalizedEmail,
+                              password,
+                            });
                         if (error) throw error;
-                        await Linking.openURL(data.signedUrl);
+                        setAuth(false);
+                        setPassword("");
+                        setNotice(
+                          signup && !data.session
+                            ? "Check your email to confirm your account, then log in."
+                            : signup
+                              ? "Your account is ready. Welcome!"
+                              : "Welcome back.",
+                        );
+                      });
+                  }}
+                />
+                {!recovery && (
+                  <Button
+                    secondary
+                    label={
+                      signup
+                        ? "Already have an account? Sign in"
+                        : "New here? Create an account"
+                    }
+                    onPress={() => {
+                      setSignup(!signup);
+                      setPassword("");
+                      setConfirmation("");
+                      setNotice("");
+                    }}
+                  />
+                )}
+                {!recovery && !signup && (
+                  <Button
+                    secondary
+                    label="Send password reset email"
+                    onPress={() =>
+                      void run(async () => {
+                        if (!backend)
+                          throw new Error(
+                            "Password reset is not available in this preview.",
+                          );
+                        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim()))
+                          throw new Error("Enter a valid email address.");
+                        const { error } =
+                          await backend.auth.resetPasswordForEmail(
+                            email.trim(),
+                            { redirectTo: authRedirect },
+                          );
+                        if (error) throw error;
+                        setNotice("Password reset email requested.");
                       })
                     }
                   />
                 )}
-                <Button
-                  secondary
-                  label={
-                    saved.includes(reader.id)
-                      ? "Remove bookmark"
-                      : "Save for later"
-                  }
-                  onPress={() => toggleSaved(reader.id)}
-                />
-                {["assistance", "idea"].includes(reader.kind) && (
-                  <Button
-                    label="Support this initiative"
-                    onPress={() =>
-                      setNotice(
-                        "Donations are not enabled yet. No money has been charged.",
-                      )
-                    }
-                  />
-                )}
-                <Button
-                  secondary
-                  label="Report this content"
-                  onPress={() =>
-                    void run(async () => {
-                      if (backend) {
-                        if (!user)
-                          throw new Error("Sign in to submit a report.");
-                        const { error } = await backend.from("reports").insert({
-                          entry_id: reader.id,
-                          reporter_id: user.id,
-                          reason: "User requested a content review",
-                        });
-                        if (error) throw error;
-                      }
-                      setNotice(
-                        backend
-                          ? "Report submitted to the moderation team."
-                          : "Demo report recorded. No live moderation team is connected.",
-                      );
-                    })
-                  }
-                />
-              </>
-            )}
-          </ScrollView>
-        </SafeAreaView>
-      </Modal>
-      <Modal
-        visible={!!form}
-        presentationStyle="pageSheet"
-        allowSwipeDismissal
-        animationType="slide"
-        onRequestClose={() => setForm(null)}
-      >
-        <SafeAreaView style={s.safe}>
-          <ScrollView
-            contentContainerStyle={s.modalContent}
-            keyboardShouldPersistTaps="handled"
-            automaticallyAdjustKeyboardInsets
-          >
-            {!!notice && !!form && (
-              <Text accessibilityRole="alert" style={s.inlineNotice}>
+              </ScrollView>
+              <BottomBanner />
+            </SafeAreaView>
+          </Modal>
+          {!!notice && !form && !auth && !reader && (
+            <View accessibilityRole="alert" style={s.toast}>
+              <Text style={{ flex: 1, color: "white", lineHeight: 21 }}>
                 {notice}
               </Text>
-            )}
-            <Button secondary label="← Cancel" onPress={() => setForm(null)} />
-            <Text style={s.heading}>
-              {form === "book"
-                ? "Share a good read."
-                : form === "idea"
-                  ? "Start something meaningful."
-                  : form === "assistance"
-                    ? "Let’s take the next step."
-                    : "Share your knowledge."}
-            </Text>
-            <Text style={s.muted}>
-              Every submission starts privately. An administrator reviews it
-              before publication. Keep sensitive personal information out of the
-              public description.
-            </Text>
-            <Text style={s.label}>Resource grade</Text>
-            <GradePicker
-              value={submissionGrade}
-              onChange={setSubmissionGrade}
-            />
-            {[
-              { label: "Title", value: title, set: setTitle },
-              {
-                label: "Public description / purpose",
-                value: description,
-                set: setDescription,
-              },
-              { label: "Subject or category", value: subject, set: setSubject },
-              {
-                label: "Author / public display name",
-                value: author,
-                set: setAuthor,
-              },
-            ].map((f) => (
-              <View key={f.label}>
-                <Text style={s.label}>{f.label}</Text>
-                <TextInput
-                  accessibilityLabel={f.label}
-                  style={[
-                    s.input,
-                    f.label.includes("description") && {
-                      height: 140,
-                      textAlignVertical: "top",
-                    },
-                  ]}
-                  value={f.value}
-                  onChangeText={f.set}
-                  multiline={f.label.includes("description")}
-                />
-              </View>
-            ))}
-            <Button
-              secondary
-              label={
-                attachment
-                  ? `Attached: ${attachment.name}`
-                  : form === "reel"
-                    ? "Attach a video"
-                    : "Attach a PDF"
-              }
-              onPress={() =>
-                void run(async () => {
-                  const r = await DocumentPicker.getDocumentAsync({
-                    type:
-                      form === "reel"
-                        ? ["video/mp4", "video/quicktime"]
-                        : "application/pdf",
-                    copyToCacheDirectory: true,
-                  });
-                  if (!r.canceled) {
-                    if ((r.assets[0].size || 0) > 20 * 1024 * 1024)
-                      throw new Error(
-                        "Please choose a file smaller than 20 MB.",
-                      );
-                    setAttachment(r.assets[0]);
-                  }
-                })
-              }
-            />
-            <Button
-              label={busy ? "Submitting…" : "Submit for review"}
-              onPress={() => {
-                if (!busy) void submit();
-              }}
-            />
-          </ScrollView>
+              <Pressable
+                accessibilityLabel="Dismiss message"
+                onPress={() => setNotice("")}
+              >
+                <Icon name="close" color="white" />
+              </Pressable>
+            </View>
+          )}
+          {busy && (
+            <View style={s.loading}>
+              <ActivityIndicator color="#245642" />
+            </View>
+          )}
         </SafeAreaView>
-      </Modal>
-      <Modal
-        visible={auth}
-        animationType="slide"
-        onRequestClose={() => setAuth(false)}
-      >
-        <SafeAreaView style={s.safe}>
-          <ScrollView
-            contentContainerStyle={s.modalContent}
-            keyboardShouldPersistTaps="handled"
-            automaticallyAdjustKeyboardInsets
-          >
-            {!!notice && auth && (
-              <Text accessibilityRole="alert" style={s.inlineNotice}>
-                {notice}
-              </Text>
-            )}
-            <Button secondary label="← Back" onPress={() => setAuth(false)} />
-            <Text style={s.heading}>
-              {recovery
-                ? "Choose a new password"
-                : signup
-                  ? "Create your account"
-                  : "Welcome back."}
-            </Text>
-            {!backend && (
-              <Text style={s.inlineNotice}>
-                Account registration and login are not available in this
-                preview. You can still explore learning and the library.
-              </Text>
-            )}
-            <TextInput
-              style={s.input}
-              placeholder="Email address"
-              accessibilityLabel="Email"
-              autoCapitalize="none"
-              keyboardType="email-address"
-              value={email}
-              onChangeText={setEmail}
-            />
-            <TextInput
-              style={s.input}
-              placeholder="Password (at least 8 characters)"
-              accessibilityLabel="Password"
-              secureTextEntry
-              value={password}
-              onChangeText={setPassword}
-            />
-            {signup && !recovery && (
-              <TextInput
-                accessibilityLabel="Confirm password"
-                placeholder="Confirm password"
-                style={s.input}
-                secureTextEntry
-                value={confirmation}
-                onChangeText={setConfirmation}
-              />
-            )}
-            {signup && !recovery && (
-              <View style={{ gap: 12 }}>
-                <Text style={s.label}>Your grade</Text>
-                <GradePicker value={signupGrade} onChange={setSignupGrade} />
-              </View>
-            )}
-            <Button
-              label={
-                busy
-                  ? "Please wait…"
-                  : recovery
-                    ? "Update password"
-                    : signup
-                      ? "Create account"
-                      : "Sign in"
-              }
-              onPress={() => {
-                if (!busy)
-                  void run(async () => {
-                    if (recovery && password.length < 8)
-                      throw new Error(
-                        "Use at least 8 characters for your password.",
-                      );
-                    const normalizedEmail = recovery
-                      ? email.trim()
-                      : validateAccountForm({
-                          email,
-                          password,
-                          confirmation,
-                          signup,
-                          grade: signupGrade,
-                        });
-                    if (!backend)
-                      throw new Error(
-                        "Account service is not connected yet. No account has been created.",
-                      );
-                    if (recovery) {
-                      const { error } = await backend!.auth.updateUser({
-                        password,
-                      });
-                      if (error) throw error;
-                      setRecovery(false);
-                      setPassword("");
-                      setAuth(false);
-                      setNotice("Your password has been updated.");
-                      return;
-                    }
-                    const { data, error } = signup
-                      ? await backend!.auth.signUp({
-                          email: normalizedEmail,
-                          password,
-                          options: {
-                            emailRedirectTo: authRedirect,
-                            data: { grade: signupGrade },
-                          },
-                        })
-                      : await backend!.auth.signInWithPassword({
-                          email: normalizedEmail,
-                          password,
-                        });
-                    if (error) throw error;
-                    setAuth(false);
-                    setPassword("");
-                    setNotice(
-                      signup && !data.session
-                        ? "Check your email to confirm your account, then log in."
-                        : signup
-                          ? "Your account is ready. Welcome!"
-                          : "Welcome back.",
-                    );
-                  });
-              }}
-            />
-            {!recovery && (
-              <Button
-                secondary
-                label={
-                  signup
-                    ? "Already have an account? Sign in"
-                    : "New here? Create an account"
-                }
-                onPress={() => {
-                  setSignup(!signup);
-                  setPassword("");
-                  setConfirmation("");
-                  setNotice("");
-                }}
-              />
-            )}
-            {!recovery && !signup && (
-              <Button
-                secondary
-                label="Send password reset email"
-                onPress={() =>
-                  void run(async () => {
-                    if (!backend)
-                      throw new Error(
-                        "Password reset is not available in this preview.",
-                      );
-                    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim()))
-                      throw new Error("Enter a valid email address.");
-                    const { error } = await backend.auth.resetPasswordForEmail(
-                      email.trim(),
-                      { redirectTo: authRedirect },
-                    );
-                    if (error) throw error;
-                    setNotice("Password reset email requested.");
-                  })
-                }
-              />
-            )}
-          </ScrollView>
-        </SafeAreaView>
-      </Modal>
-      {!!notice && !form && !auth && !reader && (
-        <View accessibilityRole="alert" style={s.toast}>
-          <Text style={{ flex: 1, color: "white", lineHeight: 21 }}>
-            {notice}
-          </Text>
-          <Pressable
-            accessibilityLabel="Dismiss message"
-            onPress={() => setNotice("")}
-          >
-            <Icon name="close" color="white" />
-          </Pressable>
-        </View>
-      )}
-      {busy && (
-        <View style={s.loading}>
-          <ActivityIndicator color="#245642" />
-        </View>
-      )}
-    </SafeAreaView>
+      </AdsProvider>
+    </BillingProvider>
   );
 }
 const s = StyleSheet.create({
-  canvas: { flex: 1, backgroundColor: "#e6ebe3", alignItems: "center" },
+  canvas: {
+    flex: 1,
+    backgroundColor: "#c5f5fa",
+    alignItems: "center",
+  },
   webApp: { maxWidth: 520, boxShadow: "0 0 60px #28412b12" },
-  safe: { flex: 1, width: "100%", backgroundColor: "#fafbf7" },
+  safe: {
+    flex: 1,
+    width: "100%",
+    backgroundColor: "transparent",
+  },
   shell: { flex: 1, flexDirection: "row" },
   eyebrow: {
     fontSize: 10,
