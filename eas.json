@@ -12,12 +12,28 @@
       "distribution": "internal",
       "android": {
         "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_ADS_ENABLED": "true",
+        "EXPO_PUBLIC_ADS_TEST_MODE": "true",
+        "ADMOB_ANDROID_APP_ID": "ca-app-pub-5159886736355105~6496716381",
+        "EXPO_PUBLIC_ADMOB_ANDROID_REWARDED": "ca-app-pub-5159886736355105/4720514569",
+        "EXPO_PUBLIC_ADMOB_ANDROID_INTERSTITIAL": "ca-app-pub-5159886736355105/6198167631",
+        "EXPO_PUBLIC_ADMOB_ANDROID_NATIVE": "ca-app-pub-5159886736355105/9402915472",
+        "EXPO_PUBLIC_ADMOB_ANDROID_BANNER": "ca-app-pub-5159886736355105/7119532918"
       }
     },
     "production": {
       "environment": "production",
       "env": {
-        "EXPO_PUBLIC_APP_ENV": "production"
+        "EXPO_PUBLIC_APP_ENV": "production",
+        "EXPO_PUBLIC_ADS_ENABLED": "true",
+        "EXPO_PUBLIC_ADS_TEST_MODE": "false",
+        "ADMOB_ANDROID_APP_ID": "ca-app-pub-5159886736355105~6496716381",
+        "EXPO_PUBLIC_ADMOB_ANDROID_REWARDED": "ca-app-pub-5159886736355105/4720514569",
+        "EXPO_PUBLIC_ADMOB_ANDROID_INTERSTITIAL": "ca-app-pub-5159886736355105/6198167631",
+        "EXPO_PUBLIC_ADMOB_ANDROID_NATIVE": "ca-app-pub-5159886736355105/9402915472",
+        "EXPO_PUBLIC_ADMOB_ANDROID_BANNER": "ca-app-pub-5159886736355105/7119532918"
       },
       "autoIncrement": true,
       "android": {

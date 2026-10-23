@@ -12,9 +12,15 @@ const assert = require("node:assert/strict");
     viewport: { width: 390, height: 844 },
   });
   const errors = [];
+  await page.addInitScript(() => {
+    if (!localStorage.getItem("education-forum-demo-v1"))
+      localStorage.setItem("education-forum-demo-v1", JSON.stringify({ grade: "Form 4" }));
+  });
+  await page.route("https://*.supabase.co/**", route => route.abort());
   page.on("pageerror", (e) => errors.push(e.message));
   await page.goto(process.env.TEST_BASE_URL || "http://127.0.0.1:8080");
   await page.getByText("What will you learn today?").waitFor();
+  await page.getByText("DEMO", { exact: true }).waitFor();
   await page
     .getByRole("button", { name: "Create account", exact: true })
     .click();
@@ -22,10 +28,13 @@ const assert = require("node:assert/strict");
   await page.getByText("Create your account", { exact: true }).waitFor();
   await page.getByLabel("Name", { exact: true }).fill("Test");
   await page.getByLabel("Surname", { exact: true }).fill("Learner");
-  await page.getByLabel("Country", { exact: true }).fill("Zimbabwe");
+  await page.getByLabel("Username", { exact: true }).fill("demo_learner");
+  await page.getByRole("button", { name: "Country", exact: true }).click();
+  await page.getByRole("button", { name: /Zimbabwe/ }).click();
   await page
-    .getByLabel("Date of birth (YYYY-MM-DD)", { exact: true })
-    .fill("2005-01-01");
+    .getByRole("button", { name: "Date of birth", exact: true })
+    .click();
+  await page.getByRole("button", { name: "2005-01-01", exact: true }).click();
   await page.getByLabel("Email", { exact: true }).fill("invalid");
   await accountDialog
     .getByRole("button", { name: "Create account", exact: true })
@@ -39,8 +48,9 @@ const assert = require("node:assert/strict");
     .getByLabel("Confirm password", { exact: true })
     .fill("different-password");
   await accountDialog
-    .getByRole("button", { name: "Form 4", exact: true })
+    .getByRole("button", { name: "Education level", exact: true })
     .click();
+  await page.getByRole("button", { name: /Form 4/ }).click();
   await accountDialog
     .getByRole("button", { name: "Create account", exact: true })
     .click();
@@ -83,7 +93,6 @@ const assert = require("node:assert/strict");
     await page.getByRole("button", { name: "Premier", exact: true }).count(),
     1,
   );
-  await page.getByRole("button", { name: "Form 4", exact: true }).click();
   await page
     .getByRole("button", { name: "Join classroom", exact: true })
     .click();
@@ -172,7 +181,10 @@ const assert = require("node:assert/strict");
     .waitFor();
   await page.getByRole("tab", { name: "Learn", exact: true }).click();
   await page.getByRole("button", { name: "Submit a lesson" }).click();
-  await page.getByRole("button", { name: "Form 4", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Resource education level", exact: true })
+    .click();
+  await page.getByRole("button", { name: /Form 4/ }).click();
   await page
     .getByLabel("Title", { exact: true })
     .fill("Community science club");
@@ -196,7 +208,7 @@ const assert = require("node:assert/strict");
   await page.getByText("Community science club", { exact: true }).waitFor();
   await page.getByRole("button", { name: "Explore admin preview" }).click();
   await page
-    .getByLabel("Review reason")
+    .getByLabel("Review reason", { exact: true })
     .fill("Reviewed project purpose and information.");
   await page.getByRole("button", { name: "Approve", exact: true }).click();
   await page.getByText("Submission approved.", { exact: true }).waitFor();

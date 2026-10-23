@@ -76,3 +76,34 @@ test("synchronous load and asynchronous show errors clean up", async () => {
   await assert.rejects(task, /unavailable/);
   assert.equal(second.destroyed, 1);
 });
+
+// Duplicate SDK load callbacks must never present the same ad twice.
+test("duplicate load events show only once", async () => {
+  const ad = fake();
+  const task = runRewardAd(ad, events, new AbortController().signal);
+  ad.emit("loaded");
+  ad.emit("loaded");
+  ad.emit("closed");
+  assert.equal(await task, false);
+  assert.equal(ad.shown, 1);
+});
+test("interstitial closes without granting a reward", async () => {
+  const ad = fake();
+  const task = runRewardAd(
+    ad,
+    { loaded: "loaded", closed: "closed", error: "error" },
+    new AbortController().signal,
+  );
+  ad.emit("loaded");
+  ad.emit("closed");
+  assert.equal(await task, false);
+  assert.equal(ad.destroyed, 1);
+});
+test("reward event before presentation does not grant credit", async () => {
+  const ad = fake();
+  const task = runRewardAd(ad, events, new AbortController().signal);
+  ad.emit("earned");
+  ad.emit("loaded");
+  ad.emit("closed");
+  assert.equal(await task, false);
+});

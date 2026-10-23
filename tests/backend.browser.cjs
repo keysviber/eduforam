@@ -36,7 +36,10 @@ const url = fs
     await dialog.getByText("Create your account", { exact: true }).waitFor();
     await dialog.getByLabel("Email", { exact: true }).waitFor();
     await dialog.getByLabel("Confirm password", { exact: true }).waitFor();
-    await dialog.getByRole("button", { name: "Form 4", exact: true }).click();
+    await dialog
+      .getByRole("button", { name: "Education level", exact: true })
+      .click();
+    await page.getByRole("button", { name: "Form 4", exact: true }).click();
     assert.equal(
       await dialog
         .getByText(

@@ -1,3 +1,5 @@
+> Latest review: [23 October 2026 requirement-by-requirement acceptance and remaining launch inputs](REQUIREMENTS_ACCEPTANCE.md). The dated evidence below describes the previous snapshot.
+
 # Update status — 22 October 2026
 
 This is the current review checklist for all 35 items in COMPLETE-REQUIREMENTS.txt, plus admin signup. The original requirements remain intact. Source locations below identify implementation to review; they do not certify every feature as release-ready.

@@ -12,7 +12,7 @@
     "test": "node --experimental-strip-types --test tests/*.test.ts",
     "build:web": "expo export --platform web --clear",
     "test:database": "node tests/database.integration.mjs",
-    "test:browser": "node tests/browser.integration.cjs",
+    "test:browser": "node scripts/test-demo-browser.cjs",
     "format": "prettier --write App.tsx src tests *.json",
     "build:native": "expo export --platform ios --platform android --output-dir dist-native --clear",
     "preview:android": "npx eas-cli build --profile preview --platform android",
@@ -21,7 +21,9 @@
     "check:play": "node scripts/check-play-release.cjs",
     "check:backend": "node scripts/check-backend.cjs",
     "test:backend-browser": "node tests/backend.browser.cjs",
-    "assets:play": "node scripts/render-play-assets.cjs"
+    "assets:play": "node scripts/render-play-assets.cjs",
+    "test:requirements": "node tests/requirements.browser.cjs",
+    "check:requirements": "node scripts/check-requirements.cjs"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.0",

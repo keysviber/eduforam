@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { View, Text, Pressable, StyleSheet } from "./Theme";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Ionicons } from "@expo/vector-icons";
@@ -6,6 +6,7 @@ import * as Speech from "expo-speech";
 import { useVideoPlayer } from "expo-video";
 import { backend } from "./backend";
 import { curriculum, languageCategories } from "./discovery";
+import { SelectField } from "./FormControls";
 
 export function Languages({
   userId,
@@ -26,9 +27,46 @@ export function Languages({
   const [message, setMessage] = useState("");
   const [completed, setCompleted] = useState<string[]>([]);
   const [loaded, setLoaded] = useState(false);
+  const [voices, setVoices] = useState<Speech.Voice[]>([]);
+  const [voiceChoice, setVoiceChoice] = useState("recorded");
+  const [voiceReady, setVoiceReady] = useState(false);
+  const pronunciationRequest = useRef(0);
   const recording = useVideoPlayer(null);
   const key = `ef-language-units-v1:${userId || "guest"}`;
   const course = curriculum[language];
+  const voiceKey = `ef-pronunciation:${userId || "guest"}:${course.code}`;
+  useEffect(() => {
+    let active = true;
+    setVoiceReady(false);
+    setVoiceChoice("recorded");
+    void Promise.all([
+      Speech.getAvailableVoicesAsync().catch(() => [] as Speech.Voice[]),
+      AsyncStorage.getItem(voiceKey).catch(() => null),
+    ]).then(([available, saved]) => {
+      if (!active) return;
+      const matching = available.filter((v) =>
+        v.language.toLowerCase().startsWith(course.code.slice(0, 2)),
+      );
+      setVoices(matching);
+      setVoiceChoice(
+        saved === "device" || matching.some((v) => v.identifier === saved)
+          ? saved!
+          : "recorded",
+      );
+      setVoiceReady(true);
+    });
+    return () => {
+      active = false;
+      pronunciationRequest.current++;
+      void Speech.stop();
+      recording.pause();
+    };
+  }, [voiceKey, recording]);
+  function stopPronunciation() {
+    pronunciationRequest.current++;
+    void Speech.stop();
+    recording.pause();
+  }
   const words = course.units[unit];
   const reviewWords = course.units.flat();
   const reviewChoices =
@@ -77,10 +115,12 @@ export function Languages({
     };
   }, [key]);
   async function pronounce(text: string) {
+    const request = ++pronunciationRequest.current;
     try {
       await Speech.stop();
+      if (request !== pronunciationRequest.current) return;
       recording.pause();
-      if (backend && userId) {
+      if (voiceChoice === "recorded" && backend && userId) {
         const audio = await backend
           .from("pronunciation_audio")
           .select("path,speaker")
@@ -88,22 +128,30 @@ export function Languages({
           .eq("phrase", text)
           .eq("active", true)
           .maybeSingle();
-        if (audio.error) throw audio.error;
+        if (request !== pronunciationRequest.current) return;
         if (audio.data) {
           const file = await backend.storage
             .from("pronunciation")
             .createSignedUrl(audio.data.path, 300);
-          if (file.error) throw file.error;
-          await recording.replaceAsync(file.data.signedUrl);
-          recording.play();
-          setMessage(`Recorded pronunciation by ${audio.data.speaker}.`);
-          return;
+          if (request !== pronunciationRequest.current) return;
+          if (!file.error) {
+            await recording.replaceAsync(file.data.signedUrl);
+            if (request !== pronunciationRequest.current) return;
+            recording.play();
+            setMessage(`Recorded pronunciation by ${audio.data.speaker}.`);
+            return;
+          }
         }
       }
       const voices = await Speech.getAvailableVoicesAsync();
-      const voice = voices.find((v) =>
+      if (request !== pronunciationRequest.current) return;
+      const matching = voices.filter((v) =>
         v.language.toLowerCase().startsWith(course.code.slice(0, 2)),
       );
+      const voice =
+        matching.find((v) => v.identifier === voiceChoice) ||
+        matching.find((v) => v.quality === Speech.VoiceQuality.Enhanced) ||
+        matching[0];
       if (!voice) {
         setMessage(
           "Install a voice for this language in your device speech settings, then retry.",
@@ -119,8 +167,12 @@ export function Languages({
             "Pronunciation could not play. Check your device voice settings.",
           ),
       });
+      setMessage(
+        `Device pronunciation: ${voice.name}.${voiceChoice === "recorded" ? " No recording is available for this phrase." : ""}`,
+      );
     } catch {
-      setMessage("Pronunciation is unavailable on this device.");
+      if (request === pronunciationRequest.current)
+        setMessage("Pronunciation is unavailable on this device.");
     }
   }
   return (
@@ -140,7 +192,7 @@ export function Languages({
             style={[s.button, language === i && s.selected]}
             key={c.name}
             onPress={() => {
-              void Speech.stop();
+              stopPronunciation();
               setLanguage(i);
               setUnit(0);
               setQuestion(0);
@@ -152,6 +204,34 @@ export function Languages({
           </Pressable>
         ))}
       </View>
+      <SelectField
+        label="Pronunciation voice"
+        value={voiceChoice}
+        options={[
+          { value: "recorded", label: "Human recording when available" },
+          { value: "device", label: "Best available device voice" },
+          ...voices.map((v) => ({
+            value: v.identifier,
+            label: `${v.name} (${v.language})`,
+          })),
+        ]}
+        onChange={(value) => {
+          stopPronunciation();
+          setVoiceChoice(value);
+          void AsyncStorage.setItem(voiceKey, value).catch(() =>
+            setMessage(
+              "Voice changed for this visit; the preference could not be saved.",
+            ),
+          );
+        }}
+      />
+      <Pressable
+        accessibilityRole="button"
+        onPress={stopPronunciation}
+        style={s.button}
+      >
+        <Text>Stop pronunciation</Text>
+      </Pressable>
       {languageCategories.map((category, i) => {
         const unlocked = loaded;
         return (
@@ -166,7 +246,7 @@ export function Languages({
               !unlocked && { opacity: 0.5 },
             ]}
             onPress={() => {
-              void Speech.stop();
+              stopPronunciation();
               setUnit(i);
               setQuestion(0);
               setMode("study");
@@ -195,6 +275,7 @@ export function Languages({
             <Pressable
               accessibilityRole="button"
               accessibilityLabel={`Listen to ${word}`}
+              disabled={!voiceReady}
               style={s.button}
               onPress={() => void pronounce(word)}
             >
@@ -208,7 +289,7 @@ export function Languages({
           style={s.button}
           disabled={!loaded}
           onPress={() => {
-            void Speech.stop();
+            stopPronunciation();
             setQuestion(0);
             setMessage("");
             setMode("quiz");

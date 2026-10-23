@@ -23,7 +23,7 @@ export function parseContentLink(value: string) {
       video = u.searchParams.get("video");
     if (join && /^[a-f0-9]{32}$/i.test(join))
       return { kind: "join" as const, id: join.toLowerCase() };
-    if (video && /^[a-f0-9-]{36}$/i.test(video))
+    if (video && /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/i.test(video))
       return { kind: "video" as const, id: video };
     return null;
   } catch {

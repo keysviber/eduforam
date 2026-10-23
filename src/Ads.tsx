@@ -18,6 +18,7 @@ import mobileAds, {
   NativeAsset,
   NativeAssetType,
   NativeMediaView,
+  InterstitialAd,
   RewardedAd,
   RewardedAdEventType,
   AdEventType,
@@ -29,6 +30,10 @@ const testAds =
   (process.env.EXPO_PUBLIC_ADS_TEST_MODE === "true" &&
     process.env.EXPO_PUBLIC_APP_ENV !== "production");
 const units = {
+  interstitial:
+    Platform.OS === "ios"
+      ? process.env.EXPO_PUBLIC_ADMOB_IOS_INTERSTITIAL
+      : process.env.EXPO_PUBLIC_ADMOB_ANDROID_INTERSTITIAL,
   banner:
     Platform.OS === "ios"
       ? process.env.EXPO_PUBLIC_ADMOB_IOS_BANNER
@@ -221,6 +226,18 @@ export function ReelAd() {
     </NativeAdView>
   );
 }
+let fullscreenPending = false;
+async function withFullscreen<T>(show: () => Promise<T>): Promise<T> {
+  if (fullscreenPending) throw new Error("Another ad is loading. Please wait.");
+  if (AppState.currentState !== "active")
+    throw new Error("Return to the app to watch an ad.");
+  fullscreenPending = true;
+  try {
+    return await show();
+  } finally {
+    fullscreenPending = false;
+  }
+}
 function watchRewarded(signal: AbortSignal) {
   return runRewardAd(
     RewardedAd.createForAdRequest(
@@ -269,7 +286,9 @@ export function LessonAdOffer() {
           void (async () => {
             while (progress.current < 2) {
               setNotice(`Ad ${progress.current + 1} of 2`);
-              const earned = await watchRewarded(request.signal);
+              const earned = await withFullscreen(() =>
+                watchRewarded(request.signal),
+              );
               if (request.signal.aborted) return;
               if (!earned) {
                 setNotice(
@@ -310,6 +329,60 @@ export function LessonAdOffer() {
     </View>
   );
 }
+
+export function OptionalInterstitial() {
+  const { allowed } = useContext(AdContext);
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState("");
+  const [completed, setCompleted] = useState(false);
+  const controller = useRef<AbortController | null>(null);
+  useEffect(() => () => controller.current?.abort(), []);
+  if (!allowed || completed || (!testAds && !units.interstitial)) return null;
+  return (
+    <View style={{ padding: 16, gap: 10 }}>
+      <Text>Optional: support Education Forum by watching an ad.</Text>
+      <Pressable
+        accessibilityRole="button"
+        disabled={busy}
+        onPress={() => {
+          if (controller.current) return;
+          const request = new AbortController();
+          controller.current = request;
+          setBusy(true);
+          setNotice("Loading ad...");
+          void withFullscreen(async () => {
+            const ad = InterstitialAd.createForAdRequest(
+              testAds ? TestIds.INTERSTITIAL : units.interstitial!,
+              { requestNonPersonalizedAdsOnly: true },
+            );
+            await runRewardAd(
+              ad,
+              {
+                loaded: AdEventType.LOADED,
+                closed: AdEventType.CLOSED,
+                error: AdEventType.ERROR,
+              },
+              request.signal,
+            );
+            if (!request.signal.aborted) setCompleted(true);
+          })
+            .catch(() => {
+              if (!request.signal.aborted)
+                setNotice("Ad unavailable. You can continue or try again.");
+            })
+            .finally(() => {
+              controller.current = null;
+              if (!request.signal.aborted) setBusy(false);
+            });
+        }}
+      >
+        <Text>{busy ? "Loading ad..." : "Watch an ad"}</Text>
+      </Pressable>
+      <Text accessibilityRole="alert">{notice}</Text>
+    </View>
+  );
+}
+
 export function AdPrivacy() {
   const { privacyRequired, privacy } = useContext(AdContext);
   const [notice, setNotice] = useState("");
@@ -330,7 +403,9 @@ export function AdPrivacy() {
             .finally(() => setBusy(false));
         }}
       >
-        <Text>{busy ? "Loading privacy choices..." : "Ad privacy choices"}</Text>
+        <Text>
+          {busy ? "Loading privacy choices..." : "Ad privacy choices"}
+        </Text>
       </Pressable>
       {!!notice && <Text accessibilityRole="alert">{notice}</Text>}
     </View>

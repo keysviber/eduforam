@@ -53,12 +53,12 @@ function Player({
     };
   }, [player]);
   return (
-    <View style={{ gap: 12 }}>
+    <View style={vertical ? { flex: 1, gap: 12 } : { gap: 12 }}>
       <VideoView
         player={player}
         style={{
           width: "100%",
-          aspectRatio: vertical ? 9 / 14 : 16 / 9,
+          ...(vertical ? { flex: 1 } : { aspectRatio: 16 / 9 }),
           backgroundColor: "#000",
         }}
         nativeControls

@@ -1146,6 +1146,126 @@ await assert.rejects(() => reserveAI(admin), /AI_DISABLED/);
 console.log(
   "PASS: AI disabled default, owner configuration, service-only atomic quotas, isolation, cooldown, daily caps and suspended accounts.",
 );
+// Acceptance cases for the complete 35-item requirements, against real SQL/RLS.
+const french = (
+  await db.query("select id from languages where name='French' limit 1")
+).rows[0].id;
+const spanish = (
+  await db.query("select id from languages where name='Spanish' limit 1")
+).rows[0].id;
+await asUser(
+  student,
+  `insert into language_messages(language_id,user_id,body) values('${french}',auth.uid(),'Bonjour')`,
+);
+await asUser(
+  other,
+  `insert into language_messages(language_id,user_id,body) values('${spanish}',auth.uid(),'Hola')`,
+);
+assert.deepEqual(
+  (
+    await asUser(
+      other,
+      `select body from language_messages where language_id='${french}'`,
+    )
+  ).rows.map((r) => r.body),
+  ["Bonjour"],
+);
+await assert.rejects(
+  () =>
+    asUser(
+      other,
+      `insert into language_messages(language_id,user_id,body) values('${french}','${student}','Forged sender')`,
+    ),
+  /row-level security/,
+);
+const safeApplication = (
+  await asUser(
+    other,
+    `insert into staff_applications(user_id,kind,subject,statement,video_path) values(auth.uid(),'safe_responder','Other','I have experience supporting learners confidentially','${other}/application.mp4') returning id`,
+  )
+).rows[0].id;
+assert.equal(
+  (await asUser(other, "select can_reply_support() allowed")).rows[0].allowed,
+  false,
+);
+await asUser(
+  admin,
+  `select review_staff('${safeApplication}',true,'Reviewed responder video and qualifications')`,
+);
+assert.equal(
+  (await asUser(other, "select can_reply_support() allowed")).rows[0].allowed,
+  true,
+);
+const quizGroup = (
+  await db.query("select id from quiz_groups where 12=any(levels)")
+).rows[0].id;
+await assert.rejects(
+  () =>
+    asUser(
+      student,
+      `insert into quiz_bank(group_id,category,subject,prompt,choices,correct) values('${quizGroup}','speed','Maths','Forbidden question','[1,2]',0)`,
+    ),
+  /row-level security/,
+);
+await assert.rejects(
+  () =>
+    asUser(
+      admin,
+      "insert into quiz_groups(name,levels) values('Bad group',array[1,2])",
+    ),
+  /check constraint|three distinct/,
+);
+await assert.rejects(
+  () =>
+    asUser(
+      admin,
+      "insert into quiz_groups(name,levels) values('Overlapping group',array[10,11,12])",
+    ),
+  /already belongs/,
+);
+const speedSet = (await asUser(student, "select start_quiz('speed') id"))
+  .rows[0].id;
+const speedSnapshot = (
+  await db.query(`select snapshot from quiz_sets where id='${speedSet}'`)
+).rows[0].snapshot;
+for (let i = 0; i < 10; i++) {
+  const issued = (await asUser(student, `select quiz_next('${speedSet}') q`))
+    .rows[0].q;
+  assert.ok(
+    Date.parse(issued.deadline) - Date.parse(issued.server_time) > 29000,
+  );
+  await asUser(
+    student,
+    `select submit_quiz_answer('${speedSet}',${i},${speedSnapshot[i].correct})`,
+  );
+}
+const speedBoard = (
+  await asUser(student, "select * from speed_quiz_leaderboard()")
+).rows;
+assert.ok(
+  speedBoard.some(
+    (r) => r.learner === "☆quiz_learner" && Number(r.elapsed_ms) >= 0,
+  ),
+);
+await assert.rejects(
+  () =>
+    asUser(
+      student,
+      "insert into pronunciation_audio(language_code,phrase,path,speaker,permission_record,consent_confirmed) values('fr-FR','Bonjour','fake.wav','Fake speaker','Permission supplied',true)",
+    ),
+  /row-level security/,
+);
+assert.equal(
+  (
+    await db.query(
+      "select count(*)::int n from storage.buckets where id in ('avatars','verification','pronunciation','submissions') and public=false",
+    )
+  ).rows[0].n,
+  4,
+);
+console.log(
+  "PASS: language board isolation/sender identity, Safe Room review gate, question-bank/group permissions, 30-second deadlines, named speed leaderboard and private media buckets.",
+);
 await db.close();
 console.log(
   "PASS: migrations, RLS, quiz integrity, moderation, private push queue, verified purchases/refunds, classroom access, reviewed earnings and payout reservation.",

@@ -4,7 +4,7 @@ Record each phrase as its own file. No AI voice model is required.
 
 Preferred: mono WAV PCM, 44.1 or 48 kHz, 16 or 24 bit. MP3 at 128 kbps or higher is also supported. Keep volume consistent, avoid clipping/background music, and leave about 0.2 seconds of silence at each end. Maximum upload: 10 MB per phrase.
 
-Obtain permission from the voice owner covering publication in Education Forum. Keep the signed permission record privately and enter its reference when publishing in Admin > Human pronunciation recordings. Use the speaker?s agreed credit name. Do not clone a voice without separate permission.
+Obtain permission from the voice owner covering publication in Education Forum. Keep the signed permission record privately and enter its reference when publishing in Admin > Human pronunciation recordings. Use the speaker's agreed credit name. Do not clone a voice without separate permission.
 
 ## French (fr-FR)
 
@@ -24,8 +24,8 @@ Obtain permission from the voice owner covering publication in Education Forum. 
 | fr-FR-012.wav | Je vais bien | I am well |
 | fr-FR-013.wav | Un livre | A book |
 | fr-FR-014.wav | Un stylo | A pen |
-| fr-FR-015.wav | Une ?cole | A school |
-| fr-FR-016.wav | De l?eau | Water |
+| fr-FR-015.wav | Une école | A school |
+| fr-FR-016.wav | De l’eau | Water |
 | fr-FR-017.wav | Du pain | Bread |
 | fr-FR-018.wav | Une pomme | An apple |
 
@@ -69,7 +69,7 @@ Obtain permission from the voice owner covering publication in Education Forum. 
 | es-ES-011.wav | ¿Cómo estás? | How are you? |
 | es-ES-012.wav | Estoy bien | I am well |
 | es-ES-013.wav | Un libro | A book |
-| es-ES-014.wav | Un bol?grafo | A pen |
+| es-ES-014.wav | Un bolígrafo | A pen |
 | es-ES-015.wav | Una escuela | A school |
 | es-ES-016.wav | Agua | Water |
 | es-ES-017.wav | Pan | Bread |

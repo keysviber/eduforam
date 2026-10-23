@@ -95,6 +95,7 @@ export function IdentitySettings({
   const task = useTask(),
     theme = useTheme();
   const [handle, setHandle] = useState(""),
+    [profileRevision, setProfileRevision] = useState(0),
     [photo, setPhoto] = useState<string | null>(null),
     [system, setSystem] = useState("ZW"),
     [level, setLevel] = useState("");
@@ -214,11 +215,12 @@ export function IdentitySettings({
                     : levelsFor(system)
                 ).find((x) => x.label === level)!.ordinal;
                 onEducationChanged(canonicalGrade(n), level);
+                setProfileRevision((value) => value + 1);
                 task.setNotice("Education level saved.");
               })
             }
           />
-          <ProfileSettings userId={userId} />
+          <ProfileSettings key={profileRevision} userId={userId} />
           <VerificationCenter userId={userId} />
           <AdminAccess userId={userId} />
           <PushSettings userId={userId} />

@@ -14,3 +14,7 @@ export function LessonAdOffer() {
 export function AdPrivacy() {
   return null;
 }
+
+export function OptionalInterstitial() {
+  return null;
+}

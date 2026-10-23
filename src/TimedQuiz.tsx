@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { View, Text, Pressable } from "./Theme";
+import { View, Text, Pressable, AppState } from "./Theme";
 import { backend } from "./backend";
 import { FeatureButton, useTask } from "./FeatureWorkflows";
 import { useVideoPlayer } from "expo-video";
@@ -31,7 +31,16 @@ export function TimedQuiz({ userId }: { userId?: string }) {
     [feedback, setFeedback] = useState<Feedback | null>(null),
     [remaining, setRemaining] = useState(30),
     [leaders, setLeaders] = useState<any[]>([]),
-    [sound, setSound] = useState(false);
+    [sound, setSound] = useState(true);
+  const [foreground, setForeground] = useState(
+    AppState.currentState === "active",
+  );
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", (state) =>
+      setForeground(state === "active"),
+    );
+    return () => subscription.remove();
+  }, []);
   const deadline = useRef(0),
     timedOut = useRef(false);
   const beat = useVideoPlayer(require("../assets/audio/quiz-beat.wav"), (p) => {
@@ -41,10 +50,10 @@ export function TimedQuiz({ userId }: { userId?: string }) {
     right = useVideoPlayer(require("../assets/audio/quiz-correct.wav")),
     wrong = useVideoPlayer(require("../assets/audio/quiz-wrong.wav"));
   useEffect(() => {
-    if (sound && setId && !feedback) beat.play();
+    if (sound && foreground && setId && !feedback?.completed) beat.play();
     else beat.pause();
     return () => beat.pause();
-  }, [sound, setId, feedback, beat]);
+  }, [sound, foreground, setId, feedback?.completed, beat]);
   async function loadLeaders() {
     if (!backend || !userId) return;
     const r =

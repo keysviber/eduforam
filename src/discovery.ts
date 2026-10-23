@@ -121,10 +121,10 @@ const extraUnits: Record<string, string[][][]> = {
     [
       ["Un livre", "A book"],
       ["Un stylo", "A pen"],
-      ["Une ?cole", "A school"],
+      ["Une école", "A school"],
     ],
     [
-      ["De l?eau", "Water"],
+      ["De l’eau", "Water"],
       ["Du pain", "Bread"],
       ["Une pomme", "An apple"],
     ],
@@ -144,7 +144,7 @@ const extraUnits: Record<string, string[][][]> = {
   Spanish: [
     [
       ["Un libro", "A book"],
-      ["Un bol?grafo", "A pen"],
+      ["Un bolígrafo", "A pen"],
       ["Una escuela", "A school"],
     ],
     [

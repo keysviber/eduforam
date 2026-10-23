@@ -29,6 +29,7 @@ import {
   BottomBanner,
   ReelAd,
   LessonAdOffer,
+  OptionalInterstitial,
   AdPrivacy,
 } from "./src/Ads";
 import { PushSettings, disablePush } from "./src/PushSettings";
@@ -1982,7 +1983,10 @@ function AppContent() {
                       reader.file_path && (
                         <>
                           {reader.video_format !== "talent" && (
-                            <LessonAdOffer />
+                            <>
+                              <LessonAdOffer />
+                              <OptionalInterstitial />
+                            </>
                           )}
                           <LessonVideo
                             entryId={reader.id}

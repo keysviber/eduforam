@@ -7,7 +7,7 @@ export type RewardAd = {
 };
 export function runRewardAd(
   ad: RewardAd,
-  events: { loaded: string; earned: string; closed: string; error: string },
+  events: { loaded: string; earned?: string; closed: string; error: string },
   signal: AbortSignal,
   timeoutMs = 30000,
 ): Promise<boolean> {
@@ -15,6 +15,7 @@ export function runRewardAd(
     let earned = false,
       settled = false;
     let timer: ReturnType<typeof setTimeout>;
+    let showing = false;
     const finish = (error?: Error) => {
       if (settled) return;
       settled = true;
@@ -37,7 +38,8 @@ export function runRewardAd(
     );
     try {
       ad.addAdEventListener(events.loaded, () => {
-        if (settled) return;
+        if (settled || showing) return;
+        showing = true;
         clearTimeout(timer);
         try {
           void ad
@@ -49,9 +51,10 @@ export function runRewardAd(
           finish(new Error("Ad unavailable. Continue the lesson."));
         }
       });
-      ad.addAdEventListener(events.earned, () => {
-        earned = true;
-      });
+      if (events.earned)
+        ad.addAdEventListener(events.earned, () => {
+          if (!settled && showing) earned = true;
+        });
       ad.addAdEventListener(events.closed, () => finish());
       ad.addAdEventListener(events.error, () =>
         finish(new Error("Ad unavailable. Continue the lesson.")),

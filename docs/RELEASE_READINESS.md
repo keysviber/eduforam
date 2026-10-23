@@ -1,4 +1,4 @@
-> Current update: see [22 October 2026 status and all 35 requested updates](UPDATE_STATUS.md). The dated notes below are historical.
+> Current update: see [23 October 2026 acceptance for all 35 requested updates](REQUIREMENTS_ACCEPTANCE.md). The dated notes below are historical.
 
 # Release readiness and specification coverage
 

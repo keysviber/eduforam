@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { View, Text, TextInput } from "./Theme";
 import { backend } from "./backend";
 import { FeatureButton, useTask } from "./FeatureWorkflows";
@@ -26,6 +26,7 @@ export function Chat({
   languageBoard?: boolean;
 }) {
   const task = useTask();
+  const generation = useRef(0);
   const [search, setSearch] = useState(""),
     [people, setPeople] = useState<Person[]>([]),
     [selected, setSelected] = useState<Person | null>(null),
@@ -38,7 +39,9 @@ export function Chat({
     [report, setReport] = useState("");
   async function load() {
     if (!backend || !userId) return;
+    const version = generation.current;
     const b = await backend.from("user_blocks").select("blocked_id");
+    if (version !== generation.current) return;
     if (b.error) throw b.error;
     setBlocked((b.data || []).map((x) => x.blocked_id));
     let q = languageBoard
@@ -55,6 +58,7 @@ export function Chat({
         `and(sender_id.eq.${userId},recipient_id.eq.${selected.id}),and(sender_id.eq.${selected.id},recipient_id.eq.${userId})`,
       );
     const r = await q.order("created_at", { ascending: false }).limit(100);
+    if (version !== generation.current) return;
     if (r.error) throw r.error;
     setMessages((r.data || []).reverse());
     const ids = [
@@ -66,6 +70,7 @@ export function Chat({
     ];
     if (ids.length) {
       const p = await backend.rpc("public_people", { ids });
+      if (version !== generation.current) return;
       if (p.error) throw p.error;
       setNames(
         Object.fromEntries((p.data || []).map((x: Person) => [x.id, x])),
@@ -83,14 +88,29 @@ export function Chat({
         if (r.error) throw r.error;
         setLanguages(r.data || []);
         if (!language && r.data?.length) setLanguage(r.data[0].id);
-      } else await load();
+      }
     });
   }, [userId, languageBoard]);
   useEffect(() => {
-    void task.run(load);
-    const timer = setInterval(() => void task.run(load), 10000);
-    return () => clearInterval(timer);
-  }, [userId, selected?.id, language]);
+    const version = ++generation.current;
+    setMessages([]);
+    setNames({});
+    setDraft("");
+    setReport("");
+    const refresh = () =>
+      void load().catch(() => {
+        if (version === generation.current)
+          task.setNotice(
+            "Messages could not refresh. Check your connection and retry.",
+          );
+      });
+    refresh();
+    const timer = setInterval(refresh, 10000);
+    return () => {
+      generation.current++;
+      clearInterval(timer);
+    };
+  }, [userId, selected?.id, language, languageBoard]);
   if (!userId || !backend) return <Text>Sign in to join conversations.</Text>;
   const visible = messages.filter(
     (m) =>
@@ -272,22 +292,20 @@ export function Chat({
             onPress={() =>
               void task.run(async () => {
                 if (!draft.trim()) throw new Error("Write a message first.");
+                const version = generation.current;
                 const r = languageBoard
-                  ? await backend!
-                      .from("language_messages")
-                      .insert({
-                        user_id: userId,
-                        language_id: language,
-                        body: draft.trim(),
-                      })
-                  : await backend!
-                      .from("direct_messages")
-                      .insert({
-                        sender_id: userId,
-                        recipient_id: selected!.id,
-                        body: draft.trim(),
-                      });
+                  ? await backend!.from("language_messages").insert({
+                      user_id: userId,
+                      language_id: language,
+                      body: draft.trim(),
+                    })
+                  : await backend!.from("direct_messages").insert({
+                      sender_id: userId,
+                      recipient_id: selected!.id,
+                      body: draft.trim(),
+                    });
                 if (r.error) throw r.error;
+                if (version !== generation.current) return;
                 setDraft("");
                 await load();
               })
@@ -327,13 +345,11 @@ function ReportMessage({
           void task.run(async () => {
             if (reason.trim().length < 5)
               throw new Error("Explain why you are reporting this message.");
-            const r = await backend!
-              .from("chat_reports")
-              .insert({
-                reporter_id: userId,
-                reason: reason.trim(),
-                [languageBoard ? "language_message" : "direct_message"]: id,
-              });
+            const r = await backend!.from("chat_reports").insert({
+              reporter_id: userId,
+              reason: reason.trim(),
+              [languageBoard ? "language_message" : "direct_message"]: id,
+            });
             if (r.error) throw r.error;
             done();
           })
