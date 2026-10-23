@@ -54,7 +54,40 @@ async function main() {
   const pending = [];
   if (!state.community) pending.push("003_community.sql");
   if (!state.services) pending.push("004_services.sql");
+  const quizRetry = await query(
+    "select position('on conflict' in pg_get_functiondef(to_regprocedure('public.answer_quiz(integer,integer)'))) > 0 as installed",
+  );
+  if (!quizRetry[0].installed) pending.push("005_quiz_retry.sql");
+  const workflows = await query(
+    "select to_regclass('public.reader_progress') is not null as installed",
+  );
+  if (!workflows[0].installed) pending.push("006_feature_workflows.sql");
+  const integrity = await query(
+    "select exists(select 1 from pg_constraint where conname='store_product_single_target' and conrelid='public.store_products'::regclass) as installed",
+  );
+  if (!integrity[0].installed) pending.push("007_service_integrity.sql");
+  const expanded = await query(
+    "select to_regclass('public.direct_messages') is not null as identity, to_regclass('public.quiz_sets') is not null as quizzes",
+  );
+  if (!expanded[0].identity) pending.push("008_identity_community.sql");
+  if (!expanded[0].quizzes) pending.push("009_timed_quiz.sql");
+  const media = await query(
+    "select to_regclass('public.pronunciation_audio') is not null as installed",
+  );
+  if (!media[0].installed) pending.push("010_learning_media.sql");
+  const adminSignup = await query(
+    "select to_regclass('public.admin_access_requests') is not null as installed",
+  );
+  if (!adminSignup[0].installed) pending.push("011_admin_signup.sql");
+  const studyAI = await query(
+    "select to_regclass('public.study_ai_settings') is not null as installed",
+  );
+  if (!studyAI[0].installed) pending.push("012_study_assistant.sql");
   console.log(`Pending migrations: ${pending.join(", ") || "none"}`);
+  const owners = await query(
+    "select count(*)::int as count from public.profiles where role='owner' and not suspended",
+  );
+  console.log(`Active owners available for admin approval: ${owners[0].count}`);
   if (process.argv.includes("--apply") && pending.length) {
     const sql = pending
       .map((name) => fs.readFileSync(`supabase/migrations/${name}`, "utf8"))
@@ -101,6 +134,56 @@ async function main() {
         throw new Error("Hosted Site URL verification failed.");
       console.log(
         "Hosted Site URL and redirect allowlist verified. Request fresh confirmation emails.",
+      );
+    }
+  }
+  if (process.argv.includes("--smtp")) {
+    const required = [
+      "SMTP_HOST",
+      "SMTP_PORT",
+      "SMTP_USER",
+      "SMTP_PASS",
+      "SMTP_ADMIN_EMAIL",
+      "SMTP_SENDER_NAME",
+      "AUTH_EMAILS_PER_HOUR",
+    ];
+    const missing = required.filter((name) => !process.env[name]);
+    if (missing.length)
+      throw new Error(
+        `Missing local email configuration: ${missing.join(", ")}. Use a verified SMTP provider.`,
+      );
+    const limit = Number(process.env.AUTH_EMAILS_PER_HOUR);
+    const port = Number(process.env.SMTP_PORT);
+    if (
+      !Number.isInteger(limit) ||
+      limit < 1 ||
+      !Number.isInteger(port) ||
+      port < 1 ||
+      port > 65535
+    )
+      throw new Error("Invalid SMTP port or hourly email limit.");
+    const settings = {
+      smtp_host: process.env.SMTP_HOST,
+      smtp_port: String(port),
+      smtp_user: process.env.SMTP_USER,
+      smtp_pass: process.env.SMTP_PASS,
+      smtp_admin_email: process.env.SMTP_ADMIN_EMAIL,
+      smtp_sender_name: process.env.SMTP_SENDER_NAME,
+      rate_limit_email_sent: limit,
+    };
+    console.log(
+      "Custom SMTP update prepared. Email confirmation and abuse protections remain enabled.",
+    );
+    if (process.argv.includes("--apply")) {
+      await api("config/auth", "PATCH", settings);
+      const verified = await api("config/auth");
+      if (
+        verified.smtp_host !== settings.smtp_host ||
+        Number(verified.rate_limit_email_sent) !== limit
+      )
+        throw new Error("SMTP configuration verification failed.");
+      console.log(
+        "Hosted SMTP configuration verified. Inbox delivery still requires a real confirmation and recovery test.",
       );
     }
   }

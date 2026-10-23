@@ -8,6 +8,11 @@ module.exports = ({ config }) => {
   const projectId = process.env.EAS_PROJECT_ID || config.extra?.eas?.projectId;
   const adsEnabled = process.env.EXPO_PUBLIC_ADS_ENABLED === "true";
   if (production && adsEnabled) {
+    if (process.env.EXPO_PUBLIC_ADS_TEST_MODE === "true")
+      throw new Error(
+        "Disable EXPO_PUBLIC_ADS_TEST_MODE for a production build.",
+      );
+    const platform = process.env.EAS_BUILD_PLATFORM || process.env.EXPO_OS;
     for (const name of [
       "ADMOB_ANDROID_APP_ID",
       "ADMOB_IOS_APP_ID",
@@ -18,7 +23,15 @@ module.exports = ({ config }) => {
       "EXPO_PUBLIC_ADMOB_ANDROID_REWARDED",
       "EXPO_PUBLIC_ADMOB_IOS_REWARDED",
     ]) {
-      if (!process.env[name] || process.env[name].includes("3940256099942544"))
+      if (platform === "android" && name.includes("IOS")) continue;
+      if (platform === "ios" && name.includes("ANDROID")) continue;
+      const pattern = name.endsWith("APP_ID")
+        ? /^ca-app-pub-\d{16}~\d{10}$/
+        : /^ca-app-pub-\d{16}\/\d{10}$/;
+      if (
+        !pattern.test(process.env[name] || "") ||
+        process.env[name].includes("3940256099942544")
+      )
         throw new Error(`Production ads require your real ${name}.`);
     }
   }

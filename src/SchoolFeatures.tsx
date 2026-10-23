@@ -1,8 +1,13 @@
 import React, { useEffect, useState } from "react";
-import { View, Text, TextInput, Pressable, StyleSheet } from "react-native";
+import { View, Text, TextInput, Pressable, StyleSheet, Share } from "./Theme";
+import { contentLink, parseContentLink } from "./content-links";
+import * as Clipboard from "expo-clipboard";
 import { backend } from "./backend";
 import { useBilling } from "./Billing";
 import { grades } from "./discovery";
+import { canonicalGrade } from "./education";
+import { useEducationCatalog } from "./education-catalog";
+import { SelectField } from "./FormControls";
 import type { Entry } from "./domain";
 
 export function GradePicker({
@@ -12,21 +17,34 @@ export function GradePicker({
   value: string | null;
   onChange: (grade: string) => void;
 }) {
+  const catalog = useEducationCatalog(),
+    [system, setSystem] = useState("ZW");
+  useEffect(() => {
+    let active = true;
+    if (backend)
+      void backend.auth.getUser().then(async (r) => {
+        if (!r.data.user) return;
+        const p = await backend!
+          .from("profiles")
+          .select("education_system")
+          .eq("id", r.data.user.id)
+          .single();
+        if (active && p.data?.education_system)
+          setSystem(p.data.education_system);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
   return (
-    <View style={s.row}>
-      {grades.map((grade) => (
-        <Pressable
-          key={grade}
-          accessibilityRole="button"
-          accessibilityLabel={grade}
-          accessibilityState={{ selected: value === grade }}
-          style={[s.button, grade === value && s.selected]}
-          onPress={() => onChange(grade)}
-        >
-          <Text>{grade}</Text>
-        </Pressable>
-      ))}
-    </View>
+    <SelectField
+      label="Resource education level"
+      value={value || ""}
+      options={catalog
+        .levelsForSystem(system)
+        .map((x) => ({ value: canonicalGrade(x.ordinal), label: x.label }))}
+      onChange={onChange}
+    />
   );
 }
 type Room = {
@@ -52,6 +70,9 @@ export function SchoolFeatures({
   entries,
   openEntry,
   signIn,
+  teacher = false,
+  responder = false,
+  invitation = "",
 }: {
   page: string;
   userId?: string;
@@ -59,6 +80,9 @@ export function SchoolFeatures({
   entries: Entry[];
   openEntry: (e: Entry) => void;
   signIn: () => void;
+  teacher?: boolean;
+  responder?: boolean;
+  invitation?: string;
 }) {
   const [rooms, setRooms] = useState<Room[]>([]);
   const billing = useBilling();
@@ -83,6 +107,15 @@ export function SchoolFeatures({
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
+  const [rosters, setRosters] = useState<
+    Record<
+      string,
+      { user_id: string; username: string; display_name: string }[]
+    >
+  >({});
+  useEffect(() => {
+    if (invitation) setCode(contentLink("join", invitation));
+  }, [invitation]);
   async function load() {
     if (!backend || !userId) return;
     if (page === "Classrooms") {
@@ -177,13 +210,14 @@ export function SchoolFeatures({
       {page === "Classrooms" ? (
         <>
           <Text>
-            Enter the invitation code shared by your teacher to access class
-            resources.
+            Open the invitation link shared by your teacher. You can also paste
+            the full invitation link here. Mobile links require the installed
+            app.
           </Text>
           <TextInput
             placeholderTextColor="#526477"
-            accessibilityLabel="Classroom invitation code"
-            placeholder="Invitation code"
+            accessibilityLabel="Classroom invitation link"
+            placeholder="Paste invitation link"
             autoCapitalize="none"
             value={code}
             onChangeText={setCode}
@@ -193,11 +227,16 @@ export function SchoolFeatures({
             label="Join classroom"
             onPress={() =>
               void act(async () => {
-                if (!code.trim())
-                  throw new Error("Enter your invitation code.");
+                const parsed = parseContentLink(code.trim());
+                const inviteCode =
+                  parsed?.kind === "join" ? parsed.id : invitation;
+                if (!inviteCode)
+                  throw new Error(
+                    "Open or paste the full invitation link from your teacher.",
+                  );
                 setOffer(null);
                 const lookup = await backend!.rpc("classroom_offer", {
-                  invite_code: code,
+                  invite_code: inviteCode,
                 });
                 if (lookup.error) throw lookup.error;
                 const room = lookup.data?.[0];
@@ -213,12 +252,12 @@ export function SchoolFeatures({
                         "This paid classroom's store product is not configured yet. Contact the teacher.",
                       );
                     const storePrice = await billing.price(room.product_id);
-                    setOffer({ ...room, storePrice, code });
+                    setOffer({ ...room, storePrice, code: inviteCode });
                     return;
                   }
                 }
                 const { error } = await backend!.rpc("join_classroom", {
-                  invite_code: code,
+                  invite_code: inviteCode,
                 });
                 if (error) throw error;
                 setCode("");
@@ -279,7 +318,49 @@ export function SchoolFeatures({
                   : "Free classroom"}
               </Text>
               {(admin || room.owner_id === userId) && (
-                <Text selectable>Invitation code: {room.join_code}</Text>
+                <View style={{ gap: 8 }}>
+                  <Text selectable>{contentLink("join", room.join_code)}</Text>
+                  <Action
+                    label="Copy classroom invitation"
+                    onPress={() =>
+                      void act(async () => {
+                        await Clipboard.setStringAsync(
+                          contentLink("join", room.join_code),
+                        );
+                        setNotice("Invitation link copied.");
+                      })
+                    }
+                  />
+                  <Action
+                    label="Share classroom invitation"
+                    onPress={() =>
+                      void Share.share({
+                        message: `Join ${room.title}: ${contentLink("join", room.join_code)}`,
+                        url: contentLink("join", room.join_code),
+                      })
+                    }
+                  />
+                  <Action
+                    label="View joined students"
+                    onPress={() =>
+                      void act(async () => {
+                        const r = await backend!.rpc("classroom_roster", {
+                          room: room.id,
+                        });
+                        if (r.error) throw r.error;
+                        setRosters({ ...rosters, [room.id]: r.data || [] });
+                      })
+                    }
+                  />
+                  {rosters[room.id]?.map((p) => (
+                    <Text key={p.user_id}>
+                      ☆{p.username} · {p.display_name}
+                    </Text>
+                  ))}
+                  {rosters[room.id]?.length === 0 && (
+                    <Text>No students have joined yet.</Text>
+                  )}
+                </View>
               )}
               {links
                 .filter((l) => l.classroom_id === room.id)
@@ -367,7 +448,7 @@ export function SchoolFeatures({
                   ))}
             </View>
           ))}
-          {userId && (
+          {userId && (admin || teacher) && (
             <View style={s.card}>
               <Text style={s.title}>Create classroom</Text>
               <TextInput
@@ -489,7 +570,7 @@ export function SchoolFeatures({
             />
           </>
           <Text style={s.title}>
-            {admin ? "Support inbox" : "Your requests"}
+            {admin || responder ? "Support inbox" : "Your requests"}
           </Text>
           {!requests.length && <Text>No requests yet.</Text>}
           {requests.map((r) => (
@@ -499,7 +580,7 @@ export function SchoolFeatures({
               </Text>
               <Text>{r.message}</Text>
               {!!r.response && <Text>Administrator: {r.response}</Text>}
-              {admin && (
+              {(admin || responder) && (
                 <>
                   <TextInput
                     placeholderTextColor="#526477"

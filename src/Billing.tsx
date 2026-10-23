@@ -5,7 +5,7 @@ import React, {
   useRef,
   useState,
 } from "react";
-import { Platform, View, Text, Pressable } from "react-native";
+import { Platform, View, Text, Pressable } from "./Theme";
 import Purchases from "react-native-purchases";
 import { backend } from "./backend";
 const key =
@@ -39,9 +39,9 @@ type Billing = {
   ready: boolean;
   noAds: boolean;
   refresh: () => Promise<void>;
-  purchase: (product: string) => Promise<void>;
+  purchase: (product: string, subscription?: boolean) => Promise<void>;
   restore: () => Promise<void>;
-  price: (product: string) => Promise<string>;
+  price: (product: string, subscription?: boolean) => Promise<string>;
 };
 const Context = createContext<Billing>({
   ready: false,
@@ -110,19 +110,29 @@ export function BillingProvider({
     ready,
     noAds,
     refresh,
-    price: async (product) => {
+    price: async (product, subscription = false) => {
       if (!userId) throw new Error("Sign in to see store pricing.");
       return withIdentity(userId, async () => {
-        const list = await Purchases.getProducts([product]);
+        const list = await Purchases.getProducts(
+          [product],
+          subscription
+            ? Purchases.PRODUCT_CATEGORY.SUBSCRIPTION
+            : Purchases.PRODUCT_CATEGORY.NON_SUBSCRIPTION,
+        );
         if (!list[0])
           throw new Error("This product is not available in your store yet.");
         return list[0].priceString;
       });
     },
-    purchase: async (product) => {
+    purchase: async (product, subscription = false) => {
       if (!userId) throw new Error("Sign in before purchasing.");
       await withIdentity(userId, async () => {
-        const list = await Purchases.getProducts([product]);
+        const list = await Purchases.getProducts(
+          [product],
+          subscription
+            ? Purchases.PRODUCT_CATEGORY.SUBSCRIPTION
+            : Purchases.PRODUCT_CATEGORY.NON_SUBSCRIPTION,
+        );
         if (!list[0])
           throw new Error("This product is not available in your store yet.");
         await Purchases.purchaseStoreProduct(list[0]);

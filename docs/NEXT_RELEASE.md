@@ -1,3 +1,5 @@
+> Current update: see [22 October 2026 status and all 35 requested updates](UPDATE_STATUS.md). The dated notes below are historical.
+
 # Education Forum 1.1.0 (build 2)
 
 ## Delivered in this version

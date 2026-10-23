@@ -1,7 +1,7 @@
 // Read-only preflight; never prints credentials or uploads a build.
 const fs = require("node:fs");
 const { validateReleaseEnvironment } = require("./release-config.cjs");
-if (fs.existsSync(".env")) process.loadEnvFile(".env");
+for (const file of [".env.local", ".env"]) if (fs.existsSync(file)) process.loadEnvFile(file);
 const app = require("../app.json").expo;
 const pkg = require("../package.json");
 const lock = require("../package-lock.json");
@@ -30,10 +30,16 @@ async function main() {
     report(false, error.message);
   }
   const project = process.env.EAS_PROJECT_ID || app.extra?.eas?.projectId;
-  report(
-    /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(project || ""),
-    "EAS project linked (EAS_PROJECT_ID or expo.extra.eas.projectId)",
-  );
+  if (process.argv.includes("--local")) {
+    report(fs.existsSync(".credentials/education-forum-upload.jks") && fs.existsSync(".credentials/android-upload.properties"),
+      "Local upload signing files present (certificate must still be verified)");
+    console.log("INFO: EAS project linking is not required for the local Gradle build.");
+  } else {
+    report(
+      /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(project || ""),
+      "EAS project linked (EAS_PROJECT_ID or expo.extra.eas.projectId)",
+    );
+  }
   for (const name of ["PRIVACY", "TERMS", "SUPPORT", "ACCOUNT_DELETION"]) {
     const value = process.env[`EXPO_PUBLIC_${name}_URL`];
     if (!value) {

@@ -1,8 +1,10 @@
 import React, { useEffect, useState } from "react";
-import { View, Text, Pressable, StyleSheet } from "react-native";
+import { View, Text, Pressable, StyleSheet } from "./Theme";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Ionicons } from "@expo/vector-icons";
 import * as Speech from "expo-speech";
+import { useVideoPlayer } from "expo-video";
+import { backend } from "./backend";
 import { curriculum, languageCategories } from "./discovery";
 
 export function Languages({
@@ -20,25 +22,48 @@ export function Languages({
   );
   const [unit, setUnit] = useState(0);
   const [question, setQuestion] = useState(0);
+  const [mode, setMode] = useState<"study" | "quiz" | "done">("study");
   const [message, setMessage] = useState("");
   const [completed, setCompleted] = useState<string[]>([]);
   const [loaded, setLoaded] = useState(false);
+  const recording = useVideoPlayer(null);
   const key = `ef-language-units-v1:${userId || "guest"}`;
   const course = curriculum[language];
   const words = course.units[unit];
+  const reviewWords = course.units.flat();
+  const reviewChoices =
+    course.units.find((items) => items.includes(reviewWords[question])) ||
+    words;
   useEffect(() => {
     let active = true;
     setLoaded(false);
     setCompleted([]);
     AsyncStorage.getItem(key)
-      .then((raw) => {
+      .then(async (raw) => {
         if (active) {
           const value = raw ? JSON.parse(raw) : [];
-          setCompleted(
-            Array.isArray(value)
-              ? value.filter((x) => typeof x === "string")
-              : [],
-          );
+          let restored: string[] = Array.isArray(value)
+            ? value.filter((x) => typeof x === "string")
+            : [];
+          if (backend && userId) {
+            const remote = await backend
+              .from("language_reviews")
+              .select("unit_key")
+              .eq("user_id", userId);
+            if (!active) return;
+            if (remote.error)
+              setMessage(
+                "Using saved device progress. Reopen learning when connected to sync your progress.",
+              );
+            else
+              restored = [
+                ...new Set([
+                  ...restored,
+                  ...(remote.data || []).map((x) => x.unit_key),
+                ]),
+              ];
+          }
+          setCompleted(restored);
           setLoaded(true);
         }
       })
@@ -54,6 +79,27 @@ export function Languages({
   async function pronounce(text: string) {
     try {
       await Speech.stop();
+      recording.pause();
+      if (backend && userId) {
+        const audio = await backend
+          .from("pronunciation_audio")
+          .select("path,speaker")
+          .eq("language_code", course.code)
+          .eq("phrase", text)
+          .eq("active", true)
+          .maybeSingle();
+        if (audio.error) throw audio.error;
+        if (audio.data) {
+          const file = await backend.storage
+            .from("pronunciation")
+            .createSignedUrl(audio.data.path, 300);
+          if (file.error) throw file.error;
+          await recording.replaceAsync(file.data.signedUrl);
+          recording.play();
+          setMessage(`Recorded pronunciation by ${audio.data.speaker}.`);
+          return;
+        }
+      }
       const voices = await Speech.getAvailableVoicesAsync();
       const voice = voices.find((v) =>
         v.language.toLowerCase().startsWith(course.code.slice(0, 2)),
@@ -81,9 +127,10 @@ export function Languages({
     <View style={s.stack}>
       <Text style={s.title}>Learn a language</Text>
       <Text>
-        Start with greetings, then build up to everyday conversation. Complete
-        each short check to unlock the next category. Progress stays on this
-        device for your account.
+        Start with greetings, then build up to everyday conversation. Study all
+        categories at your own pace, then choose a separate review quiz.
+        Signed-in progress syncs to your account. Human recordings are used when
+        available; otherwise the app uses your installed language voice.
       </Text>
       <View style={s.row}>
         {curriculum.map((c, i) => (
@@ -97,6 +144,7 @@ export function Languages({
               setLanguage(i);
               setUnit(0);
               setQuestion(0);
+              setMode("study");
               setMessage("");
             }}
           >
@@ -105,8 +153,7 @@ export function Languages({
         ))}
       </View>
       {languageCategories.map((category, i) => {
-        const unlocked =
-          loaded && (i === 0 || completed.includes(`${course.name}:${i - 1}`));
+        const unlocked = loaded;
         return (
           <Pressable
             key={category}
@@ -122,6 +169,7 @@ export function Languages({
               void Speech.stop();
               setUnit(i);
               setQuestion(0);
+              setMode("study");
               setMessage("");
             }}
           >
@@ -139,55 +187,114 @@ export function Languages({
       <Text style={s.title}>
         {course.name} · {languageCategories[unit]}
       </Text>
-      {words.map(([word, meaning]) => (
-        <View style={s.card} key={word}>
-          <Text style={s.word}>{word}</Text>
-          <Text>{meaning}</Text>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={`Listen to ${word}`}
-            style={s.button}
-            onPress={() => void pronounce(word)}
-          >
-            <Ionicons name="volume-high" size={24} color="#245642" />
-          </Pressable>
-        </View>
-      ))}
-      <Text style={s.word}>
-        Quick check {question + 1} of {words.length}: What does “
-        {words[question][0]}” mean?
-      </Text>
-      {[...words].reverse().map(([, meaning]) => (
+      {mode === "study" &&
+        words.map(([word, meaning]) => (
+          <View style={s.card} key={word}>
+            <Text style={s.word}>{word}</Text>
+            <Text>{meaning}</Text>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`Listen to ${word}`}
+              style={s.button}
+              onPress={() => void pronounce(word)}
+            >
+              <Ionicons name="volume-high" size={24} color="#245642" />
+            </Pressable>
+          </View>
+        ))}
+      {mode === "study" && (
         <Pressable
-          key={meaning}
           accessibilityRole="button"
-          disabled={!loaded}
           style={s.button}
-          onPress={async () => {
-            if (meaning !== words[question][1]) {
-              setMessage("Try again. Review the words above.");
-              return;
-            }
-            if (question < words.length - 1) {
-              setQuestion(question + 1);
-              setMessage("Correct! Try the next word.");
-              return;
-            }
-            const next = [...new Set([...completed, `${course.name}:${unit}`])];
-            try {
-              await AsyncStorage.setItem(key, JSON.stringify(next));
-              setCompleted(next);
-              setMessage(
-                "Category complete! Choose the next category or practise again.",
-              );
-            } catch {
-              setMessage("Could not save progress. Try the answer again.");
-            }
+          disabled={!loaded}
+          onPress={() => {
+            void Speech.stop();
+            setQuestion(0);
+            setMessage("");
+            setMode("quiz");
           }}
         >
-          <Text>{meaning}</Text>
+          <Text>Start review quiz - all categories</Text>
         </Pressable>
-      ))}
+      )}
+      {mode !== "study" && (
+        <Pressable
+          accessibilityRole="button"
+          style={s.button}
+          onPress={() => {
+            setMode("study");
+            setMessage("");
+          }}
+        >
+          <Text>Return to study</Text>
+        </Pressable>
+      )}
+      {mode === "done" && (
+        <Text>
+          Review complete! Keep studying and come back for another review
+          whenever you are ready.
+        </Text>
+      )}
+      {mode === "quiz" && (
+        <>
+          <Text style={s.word}>
+            Review question {question + 1} of {reviewWords.length}: What does “
+            {reviewWords[question][0]}” mean?
+          </Text>
+          {[...new Set(reviewChoices.map(([, meaning]) => meaning))]
+            .reverse()
+            .map((meaning) => (
+              <Pressable
+                key={meaning}
+                accessibilityRole="button"
+                disabled={!loaded}
+                style={s.button}
+                onPress={async () => {
+                  if (meaning !== reviewWords[question][1]) {
+                    setMessage(
+                      "Try again, or return to study for a refresher.",
+                    );
+                    return;
+                  }
+                  if (question < reviewWords.length - 1) {
+                    setQuestion(question + 1);
+                    setMessage("Correct! Try the next word.");
+                    return;
+                  }
+                  const next = [
+                    ...new Set([
+                      ...completed,
+                      ...course.units.map((_, i) => `${course.name}:${i}`),
+                    ]),
+                  ];
+                  try {
+                    if (backend && userId) {
+                      const r = await backend.from("language_reviews").upsert(
+                        next.map((unit_key) => ({
+                          user_id: userId,
+                          unit_key,
+                        })),
+                      );
+                      if (r.error) throw r.error;
+                    }
+                    await AsyncStorage.setItem(key, JSON.stringify(next));
+                    setCompleted(next);
+                    setMode("done");
+                    setMessage(
+                      "All categories reviewed. Your progress is saved.",
+                    );
+                  } catch {
+                    setMessage(
+                      "Could not save progress. Try the answer again.",
+                    );
+                  }
+                }}
+              >
+                <Text>{meaning}</Text>
+              </Pressable>
+            ))}
+        </>
+      )}
       {!!message && <Text accessibilityRole="alert">{message}</Text>}
     </View>
   );

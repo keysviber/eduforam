@@ -38,6 +38,10 @@ async function check(path, label, auth = false) {
 }
 Promise.all([
   check("/auth/v1/settings", "Authentication", true),
+  check(
+    "/rest/v1/quiz_questions?select=id,subject,prompt,choices&limit=1",
+    "Guru quiz questions",
+  ),
   ...[
     "profiles",
     "entries",
@@ -49,3 +53,14 @@ Promise.all([
     "bookmarks",
   ].map((table) => check(`/rest/v1/${table}?select=*&limit=0`, table)),
 ]);
+if (process.argv.includes("--services")) {
+  void Promise.all(["purchase-sync", "revenuecat-webhook", "payout-account", "payout-transfer", "push-dispatch"].map(async (name) => {
+    try {
+      const r = await fetch(`${url}/functions/v1/${name}`, { method: "POST", headers: { apikey: key, "Content-Type": "application/json" }, body: "{}", signal: AbortSignal.timeout(30000) });
+      const body = await r.json();
+      const rejected = [400,401,403].includes(r.status) && typeof body.error === "string";
+      console.log(JSON.stringify({ check: `${name} unauthenticated rejection`, status: r.status, passed: rejected }));
+      if (!rejected) process.exitCode = 1;
+    } catch { console.log(JSON.stringify({ check: name, passed: false })); process.exitCode = 1; }
+  }));
+}

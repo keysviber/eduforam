@@ -16,8 +16,14 @@ export const grades = [
 
 export function matchesHomeGrade(level: string, grade: string | null) {
   if (!grade) return false;
-  const learner = grades.indexOf(grade);
-  const content = grades.indexOf(level);
+  const index = (value: string) => {
+    const legacy = grades.indexOf(value);
+    if (legacy >= 0) return legacy;
+    const m = value.match(/^(?:Year|Grade|Level) (\d{1,2})$/);
+    return m && Number(m[1]) >= 1 && Number(m[1]) <= 20 ? Number(m[1]) - 1 : -1;
+  };
+  const learner = index(grade);
+  const content = index(level);
   return learner >= 0 && content >= 0 && Math.abs(learner - content) <= 1;
 }
 

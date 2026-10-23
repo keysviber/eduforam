@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from "react";
-import { View, Text, Pressable, TextInput, StyleSheet } from "react-native";
+import React, { useEffect, useState, useRef } from "react";
+import { View, Text, Pressable, TextInput, StyleSheet } from "./Theme";
 import { backend } from "./backend";
 
 function Action({
@@ -25,8 +25,10 @@ function Action({
 function useAction() {
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
+  const lock = useRef(false);
   async function run(fn: () => Promise<void>) {
-    if (busy) return;
+    if (lock.current) return;
+    lock.current = true;
     setBusy(true);
     setNotice("");
     try {
@@ -36,6 +38,7 @@ function useAction() {
         (e as { message?: string }).message || "Could not load. Please retry.",
       );
     } finally {
+      lock.current = false;
       setBusy(false);
     }
   }
@@ -108,9 +111,12 @@ export function Quiz({ userId }: { userId?: string }) {
     [],
   );
   const [subject, setSubject] = useState("All");
+  const [loaded, setLoaded] = useState(false);
+  const [feedback, setFeedback] = useState("");
   const { notice, setNotice, busy, run } = useAction();
   async function load() {
     if (!backend) return;
+    setLoaded(false);
     const q = await backend
       .from("quiz_questions")
       .select("id,subject,prompt,choices")
@@ -118,15 +124,21 @@ export function Quiz({ userId }: { userId?: string }) {
     if (q.error) throw q.error;
     setQuestions(q.data || []);
     if (userId) {
-      const a = await backend.from("quiz_answers").select("question_id");
+      const a = await backend
+        .from("quiz_answers")
+        .select("question_id")
+        .eq("user_id", userId);
       if (a.error) throw a.error;
       setAnswered((a.data || []).map((x) => x.question_id));
       const l = await backend.rpc("quiz_leaderboard");
       if (l.error) throw l.error;
       setLeaders(l.data || []);
     }
+    setLoaded(true);
   }
   useEffect(() => {
+    setLoaded(false);
+    setFeedback("");
     setAnswered([]);
     setLeaders([]);
     void run(load);
@@ -150,7 +162,11 @@ export function Quiz({ userId }: { userId?: string }) {
         <Action
           key={x}
           title={(x === subject ? "✓ " : "") + x}
-          onPress={() => setSubject(x)}
+          disabled={busy}
+          onPress={() => {
+            setSubject(x);
+            setFeedback("");
+          }}
         />
       ))}
       <Text accessibilityRole="alert">{notice}</Text>
@@ -159,7 +175,13 @@ export function Quiz({ userId }: { userId?: string }) {
         disabled={busy}
         onPress={() => void run(load)}
       />
-      {question ? (
+      {!!feedback && (
+        <View>
+          <Text accessibilityRole="alert">{feedback}</Text>
+          <Action title="Next question" onPress={() => setFeedback("")} />
+        </View>
+      )}
+      {!feedback && loaded && question ? (
         <View style={s.card}>
           <Text style={s.title}>{question.prompt}</Text>
           {question.choices.map((c, i) => (
@@ -174,18 +196,27 @@ export function Quiz({ userId }: { userId?: string }) {
                     selected: i,
                   });
                   if (error) throw error;
+                  setAnswered((previous) => [
+                    ...new Set([...previous, question.id]),
+                  ]);
+                  setFeedback(`${data.points} points. ${data.explanation}`);
                   await load();
-                  setNotice(`${data.points} points. ${data.explanation}`);
                 })
               }
             />
           ))}
         </View>
       ) : (
+        !feedback &&
         backend && (
           <Text>
-            All available questions completed in this category. More questions
-            can be added by the school.
+            {busy
+              ? "Loading quiz..."
+              : !loaded
+                ? "Quiz could not be loaded. Use Refresh quiz to retry."
+                : !questions.length
+                  ? "No quiz questions are available yet."
+                  : "All available questions completed in this category. More questions can be added by the school."}
           </Text>
         )
       )}

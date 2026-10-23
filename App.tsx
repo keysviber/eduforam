@@ -1,3 +1,5 @@
+import { StudyAssistant, StudyAssistantSettings } from "./src/StudyAssistant";
+import { AdminAccess } from "./src/AdminAccess";
 import React, { useEffect, useState, useRef, useCallback } from "react";
 import {
   View,
@@ -13,7 +15,7 @@ import {
   Linking,
   ActivityIndicator,
   Share,
-} from "react-native";
+} from "./src/Theme";
 import {
   SafeAreaProvider,
   SafeAreaView,
@@ -45,13 +47,41 @@ import {
   VideoSocial,
   EarningRates,
 } from "./src/CommunityFeatures";
+import { ThemeProvider, useTheme } from "./src/Theme";
+import { useEducationCatalog } from "./src/education-catalog";
+import { IdentitySettings, VerificationCenter } from "./src/IdentitySettings";
+import { Chat, ChatModeration } from "./src/Chat";
+import { SelectField, DateField } from "./src/FormControls";
+import {
+  educationSystems,
+  levelsFor,
+  canonicalGrade,
+  subjects,
+} from "./src/education";
+import { TalentFeed } from "./src/TalentFeed";
+import { TimedQuiz } from "./src/TimedQuiz";
+import { QuizAdministration } from "./src/QuizAdministration";
+import { VoiceAdministration } from "./src/VoiceAdministration";
+import { contentLink, parseContentLink } from "./src/content-links";
 import { Languages } from "./src/Languages";
 import { GradePicker, SchoolFeatures } from "./src/SchoolFeatures";
 import { LessonVideo } from "./src/LessonVideo";
 import { grades, matchesHomeGrade } from "./src/discovery";
 import { backend } from "./src/backend";
 import { coreEducationRelease, isCorePage } from "./src/release";
+import { authErrorMessage, validateNewPassword } from "./src/auth-errors";
+import { emailRequest, getAuthRedirect } from "./src/auth-email";
 import { parseAuthLink } from "./src/auth-links";
+import {
+  ProfileSettings,
+  EducatorDirectory,
+  TransactionHistory,
+  SubmissionEditor,
+  ReadingProgress,
+  AccountRequestAdministration,
+} from "./src/FeatureWorkflows";
+import { CourseLibrary } from "./src/CourseLibrary";
+import { FundingWorkflows } from "./src/FundingWorkflows";
 import { Management, Plans } from "./src/Management";
 import {
   Entry,
@@ -104,9 +134,28 @@ const tabs: {
   },
 ];
 const parentTab = (page: string) =>
-  ["Languages", "Community", "Classrooms", "Safe Room"].includes(page)
+  [
+    "AI study assistant",
+    "Languages",
+    "Community",
+    "Classrooms",
+    "Safe Room",
+    "Courses",
+    "Educators",
+    "Opportunities",
+    "Language board",
+  ].includes(page)
     ? "Learning"
-    : ["Premier", "Earnings", "Community", "Admin"].includes(page)
+    : [
+          "Premier",
+          "Earnings",
+          "Community",
+          "Admin",
+          "Profile",
+          "Settings",
+          "Messages",
+          "Transactions",
+        ].includes(page)
       ? "Account"
       : page;
 function tactile() {
@@ -127,16 +176,20 @@ function Button({
   label,
   onPress,
   secondary = false,
+  disabled = false,
 }: {
   label: string;
   onPress: () => void;
   secondary?: boolean;
+  disabled?: boolean;
 }) {
   return (
     <Pressable
       accessibilityRole="button"
       onPress={onPress}
-      style={[s.button, secondary && s.secondary]}
+      disabled={disabled}
+      accessibilityState={{ disabled }}
+      style={[s.button, secondary && s.secondary, disabled && { opacity: 0.5 }]}
     >
       <Text style={[s.buttonText, secondary && { color: "#254c3f" }]}>
         {label}
@@ -146,25 +199,36 @@ function Button({
 }
 export default function App() {
   return (
-    <SafeAreaProvider>
-      <LinearGradient
-        colors={["#76e4ef", "#c4b5fd", "#f9a8d4"]}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={s.canvas}
-      >
-        <AppContent />
-      </LinearGradient>
-    </SafeAreaProvider>
+    <ThemeProvider>
+      <SafeAreaProvider>
+        <LinearGradient
+          colors={["#76e4ef", "#c4b5fd", "#f9a8d4"]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={s.canvas}
+        >
+          <AppContent />
+        </LinearGradient>
+      </SafeAreaProvider>
+    </ThemeProvider>
   );
 }
 function AppContent() {
+  const theme = useTheme(),
+    educationCatalog = useEducationCatalog();
+  const [educationDisplay, setEducationDisplay] = useState("");
   const [moderator, setModerator] = useState(false);
   const [videoFormat, setVideoFormat] = useState<"lesson" | "talent">("lesson");
   const [firstName, setFirstName] = useState("");
   const [surname, setSurname] = useState("");
   const [birthDate, setBirthDate] = useState("");
-  const [country, setCountry] = useState("");
+  const [country, setCountry] = useState("Zimbabwe");
+  const [educationSystem, setEducationSystem] = useState("ZW"),
+    [educationLevel, setEducationLevel] = useState(""),
+    [username, setUsername] = useState("");
+  const [invite, setInvite] = useState(""),
+    [linkedVideo, setLinkedVideo] = useState(""),
+    [safeResponder, setSafeResponder] = useState(false);
   const [accountType, setAccountType] = useState("student");
   const [languageStart, setLanguageStart] = useState("French");
   const [editingGrade, setEditingGrade] = useState(false);
@@ -173,11 +237,14 @@ function AppContent() {
   const [submissionGrade, setSubmissionGrade] = useState<string | null>(null);
   const [videoSearch, setVideoSearch] = useState("");
   const [recovery, setRecovery] = useState(false);
-  const authRedirect =
-    Platform.OS === "web"
-      ? process.env.EXPO_PUBLIC_AUTH_REDIRECT_URL ||
-        (typeof window !== "undefined" ? window.location.origin : undefined)
-      : "educationforum://auth/callback";
+  const [pendingConfirmation, setPendingConfirmation] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const authRedirect = getAuthRedirect(
+    Platform.OS,
+    process.env.EXPO_PUBLIC_AUTH_REDIRECT_URL,
+    typeof window !== "undefined" ? window.location.origin : undefined,
+  );
+  const actionLock = useRef(false);
   const insets = useSafeAreaInsets();
   const scrollRef = useRef<ScrollView>(null);
   const authGeneration = useRef(0);
@@ -212,6 +279,36 @@ function AppContent() {
     [confirmation, setConfirmation] = useState(""),
     [signup, setSignup] = useState(false),
     [reviewReason, setReviewReason] = useState("");
+  useEffect(() => {
+    const open = (url: string) => {
+      const link = parseContentLink(url);
+      if (link?.kind === "join") {
+        setInvite(link.id);
+        setPage("Classrooms");
+      }
+      if (link?.kind === "video") {
+        setLinkedVideo(link.id);
+        setPage("Community");
+      }
+    };
+    if (Platform.OS === "web" && typeof window !== "undefined")
+      open(window.location.href);
+    void Linking.getInitialURL().then((url) => {
+      if (url) open(url);
+    });
+    const sub = Linking.addEventListener("url", ({ url }) => open(url));
+    return () => sub.remove();
+  }, []);
+  useEffect(() => {
+    if (!linkedVideo) return;
+    const entry = entries.find(
+      (e) => e.id === linkedVideo && e.status === "approved",
+    );
+    if (entry) {
+      setReader(entry);
+      setLinkedVideo("");
+    }
+  }, [linkedVideo, entries]);
   useContentUsage(
     reader?.kind !== "reel" ? reader?.id : undefined,
     user?.id,
@@ -227,6 +324,8 @@ function AppContent() {
   const admin = backend ? ["admin", "owner"].includes(role) : demoAdmin;
   function openAccount(create: boolean) {
     setSignup(create);
+    setPendingConfirmation(false);
+    setShowPassword(false);
     setRecovery(false);
     setNotice("");
     setPassword("");
@@ -249,16 +348,15 @@ function AppContent() {
     );
   }
   async function run(fn: () => Promise<void>) {
+    if (actionLock.current) return;
+    actionLock.current = true;
     setBusy(true);
     try {
       await fn();
     } catch (e) {
-      setNotice(
-        e instanceof Error
-          ? e.message
-          : "Something went wrong. Please try again.",
-      );
+      setNotice(authErrorMessage(e));
     } finally {
+      actionLock.current = false;
       setBusy(false);
     }
   }
@@ -298,12 +396,16 @@ function AppContent() {
       const generation = ++authGeneration.current;
       if (_event === "PASSWORD_RECOVERY") {
         setRecovery(true);
+        setPendingConfirmation(false);
+        setConfirmation("");
+        setEmail(session?.user.email || "");
         setPassword("");
         setAuth(true);
       }
       setUser(session?.user ?? null);
       setRole("student");
       setModerator(false);
+      setSafeResponder(false);
       setGrade(null);
       if (!session) {
         setRecovery(false);
@@ -318,7 +420,9 @@ function AppContent() {
         if (session)
           backend
             ?.from("profiles")
-            .select("role,grade,moderator")
+            .select(
+              "role,grade,moderator,safe_responder,education_level,education_ordinal",
+            )
             .eq("id", session.user.id)
             .single()
             .then(({ data, error }) => {
@@ -329,7 +433,14 @@ function AppContent() {
               if (active && generation === authGeneration.current) {
                 setRole(data?.role || "student");
                 setModerator(!!data?.moderator);
-                setGrade(data?.grade || null);
+                setSafeResponder(!!data?.safe_responder);
+                setGrade(
+                  data?.grade ||
+                    (data?.education_ordinal
+                      ? canonicalGrade(data.education_ordinal)
+                      : null),
+                );
+                setEducationDisplay(data?.education_level || data?.grade || "");
               }
             });
         void refresh().catch(() =>
@@ -371,10 +482,17 @@ function AppContent() {
         if (!credentials) return;
         const { error } = await backend!.auth.setSession(credentials);
         if (error) throw error;
-        if (active && credentials.recovery) {
+        if (!active) return;
+        setPendingConfirmation(false);
+        setConfirmation("");
+        setPassword("");
+        if (credentials.recovery) {
           setRecovery(true);
-          setPassword("");
           setAuth(true);
+        } else {
+          setRecovery(false);
+          setAuth(false);
+          setNotice("Email confirmed. You are signed in.");
         }
       } catch {
         if (active)
@@ -532,11 +650,31 @@ function AppContent() {
         raised: 0,
         color: palette[entries.length % palette.length],
         file_path,
+        media_type: attachment?.mimeType?.startsWith("video/")
+          ? "video"
+          : "document",
       };
       if (backend) {
         const { error } = await backend.from("entries").insert(entry);
-        if (error) throw error;
-        await refresh();
+        if (error) {
+          if (file_path)
+            await backend.storage.from("submissions").remove([file_path]);
+          throw error;
+        }
+        // The submission is committed even if refreshing the list fails.
+        setForm(null);
+        setEntries((current) => [
+          entry,
+          ...current.filter((item) => item.id !== entry.id),
+        ]);
+        try {
+          await refresh();
+        } catch {
+          setNotice(
+            "Your submission was saved. Refresh the list to see its latest status.",
+          );
+          return;
+        }
       } else setEntries((v) => [entry, ...v]);
       setForm(null);
       setNotice(
@@ -707,7 +845,8 @@ function AppContent() {
           secondary
           onPress={() =>
             void Share.share({
-              message: entry.title + " ? " + entry.description.slice(0, 120),
+              message: entry.title + " " + contentLink("video", entry.id),
+              url: contentLink("video", entry.id),
             }).catch(() => setNotice("Sharing was unavailable. Please retry."))
           }
         />
@@ -739,12 +878,17 @@ function AppContent() {
   }
   return (
     <BillingProvider key={user?.id || "guest"} userId={user?.id}>
+      <PushSettings userId={user?.id} promptOnly />
       <AdsProvider>
         <SafeAreaView
           edges={["top", "left", "right"]}
-          style={[s.safe, Platform.OS === "web" && s.webApp]}
+          style={[
+            s.safe,
+            Platform.OS === "web" && s.webApp,
+            theme.dark && { backgroundColor: "#11241f" },
+          ]}
         >
-          <StatusBar style="dark" />
+          <StatusBar style={theme.dark ? "light" : "dark"} />
           <View style={s.shell}>
             <View style={{ flex: 1 }}>
               <View style={s.topbar}>
@@ -958,66 +1102,43 @@ function AppContent() {
                     </View>
                     <View style={s.card}>
                       <Text style={s.cardTitle}>
-                        {grade ? "Your home - " + grade : "Choose your grade"}
+                        {grade
+                          ? "Your home - " + (educationDisplay || grade)
+                          : "Choose your education level in Settings"}
                       </Text>
                       <Text style={s.muted}>
                         Home shows your grade, one below and one above. Search
                         the library or videos to explore other grades.
                       </Text>
-                      {grade && (!backend || user) && (
-                        <Button
-                          secondary
-                          label={
-                            editingGrade
-                              ? "Cancel grade change"
-                              : "Change grade"
-                          }
-                          onPress={() => setEditingGrade((v) => !v)}
-                        />
-                      )}
-                      {(!backend || user) && (!grade || editingGrade) && (
-                        <GradePicker
-                          value={grade}
-                          onChange={(g) => {
-                            if (!backend) {
-                              setGrade(g);
-                              setEditingGrade(false);
-                              return;
-                            }
-                            if (busy) return;
-                            const generation = authGeneration.current;
-                            void run(async () => {
-                              const { error } = await backend!.rpc(
-                                "set_my_grade",
-                                {
-                                  new_grade: g,
-                                },
-                              );
-                              if (error) throw error;
-                              if (generation === authGeneration.current) {
-                                setGrade(g);
-                                setEditingGrade(false);
-                              }
-                            });
-                          }}
-                        />
-                      )}
+                      <Button
+                        secondary
+                        label="Open education settings"
+                        onPress={() => go("Settings")}
+                      />
                     </View>
                     <View style={s.card}>
                       <Text style={s.sectionHeading}>Video lessons</Text>
                       <Text style={s.muted}>
-                        Discover the latest videos from our learning community.
+                        Discover videos for your grade, one below and one above.
                       </Text>
-                      {publicEntries
-                        .filter((e) => e.kind === "reel")
+                      {homeEntries
+                        .filter(
+                          (e) =>
+                            (e.kind === "reel" || e.media_type === "video") &&
+                            e.video_format !== "talent",
+                        )
                         .slice(0, 4)
                         .map((e) => (
                           <EntryCard key={e.id} entry={e} />
                         ))}
-                      {!publicEntries.some((e) => e.kind === "reel") && (
+                      {!homeEntries.some(
+                        (e) =>
+                          (e.kind === "reel" || e.media_type === "video") &&
+                          e.video_format !== "talent",
+                      ) && (
                         <Text style={s.small}>
-                          No public videos yet. Share the first lesson or talent
-                          reel.
+                          No videos for your grade yet. Search all video lessons
+                          to explore other grades.
                         </Text>
                       )}
                       <Button
@@ -1175,6 +1296,13 @@ function AppContent() {
                     )}
                   </>
                 )}
+                {page === "AI study assistant" && (
+                  <StudyAssistant
+                    key={user?.id || "guest"}
+                    userId={user?.id}
+                    onSignIn={() => setAuth(true)}
+                  />
+                )}
                 {page === "Learning" && (
                   <>
                     <Heading
@@ -1197,6 +1325,18 @@ function AppContent() {
                       </View>
                       <Icon name="chevron-forward" />
                     </Pressable>
+                    <Button
+                      label="AI study assistant"
+                      onPress={() => go("AI study assistant")}
+                    />
+                    <Button
+                      label="Browse language courses"
+                      onPress={() => go("Courses")}
+                    />
+                    <Button
+                      label="Discover teachers and creators"
+                      onPress={() => go("Educators")}
+                    />
                     <View style={s.tiles}>
                       {publicEntries
                         .filter((e) => e.kind === "course")
@@ -1217,17 +1357,71 @@ function AppContent() {
                     </View>
                   </>
                 )}
-                {page === "Languages" && (
-                  <Languages
+                {page === "Settings" && (
+                  <IdentitySettings
                     key={user?.id || "guest"}
                     userId={user?.id}
-                    initialLanguage={languageStart}
+                    onEducationChanged={(g, label) => {
+                      setGrade(g);
+                      setEducationDisplay(label || g);
+                    }}
                   />
+                )}
+                {page === "Messages" && (
+                  <Chat key={user?.id || "guest"} userId={user?.id} />
+                )}
+                {page === "Language board" && (
+                  <Chat
+                    key={user?.id || "guest"}
+                    userId={user?.id}
+                    languageBoard
+                  />
+                )}
+                {page === "Profile" && (
+                  <ProfileSettings
+                    key={user?.id || "guest"}
+                    userId={user?.id}
+                  />
+                )}
+                {page === "Transactions" && (
+                  <TransactionHistory
+                    key={user?.id || "guest"}
+                    userId={user?.id}
+                  />
+                )}
+                {page === "Courses" && (
+                  <CourseLibrary
+                    key={user?.id || "guest"}
+                    userId={user?.id}
+                    admin={admin}
+                  />
+                )}
+                {page === "Educators" && (
+                  <EducatorDirectory
+                    key={user?.id || "guest"}
+                    userId={user?.id}
+                  />
+                )}
+                {page === "Languages" && (
+                  <View style={{ gap: 12 }}>
+                    <Button
+                      label="Language practice chat board"
+                      onPress={() => go("Language board")}
+                    />
+                    <Languages
+                      key={user?.id || "guest"}
+                      userId={user?.id}
+                      initialLanguage={languageStart}
+                    />
+                  </View>
                 )}
                 {["Classrooms", "Safe Room"].includes(page) && (
                   <SchoolFeatures
                     key={`${page}:${user?.id || "guest"}`}
                     page={page}
+                    teacher={role === "teacher"}
+                    responder={safeResponder}
+                    invitation={invite}
                     userId={user?.id}
                     admin={admin}
                     entries={publicEntries}
@@ -1268,6 +1462,12 @@ function AppContent() {
                         />
                       </View>
                     </View>
+                    <FundingWorkflows
+                      key={user?.id || "guest"}
+                      userId={user?.id}
+                      admin={admin}
+                      entries={entries}
+                    />
                     <Text style={s.sectionHeading}>Meet the possibilities</Text>
                     <View style={s.tiles}>
                       {publicEntries
@@ -1278,7 +1478,9 @@ function AppContent() {
                     </View>
                   </>
                 )}
-                {page === "Quiz" && <Quiz userId={user?.id} />}
+                {page === "Quiz" && (
+                  <TimedQuiz key={user?.id || "guest"} userId={user?.id} />
+                )}
                 {page === "Notifications" && (
                   <Notifications userId={user?.id} />
                 )}
@@ -1296,37 +1498,19 @@ function AppContent() {
                         setVideoFormat("talent");
                       }}
                     />
-                    {publicEntries
-                      .filter(
-                        (e) => e.kind === "reel" && e.video_format === "talent",
-                      )
-                      .map((e, index) => (
-                        <View key={e.id} style={s.card}>
-                          <Text style={s.cardTitle}>{e.title}</Text>
-                          {e.file_path && (
-                            <LessonVideo
-                              entryId={e.id}
-                              path={e.file_path}
-                              userId={user?.id}
-                            />
-                          )}
-                          <EntryCard entry={e} />
-                          <VideoSocial
-                            entryId={e.id}
-                            userId={user?.id}
-                            moderator={admin || moderator}
-                          />
-                          {(index + 1) % 5 === 0 && <ReelAd />}
-                        </View>
-                      ))}
+                    <TalentFeed
+                      entries={publicEntries}
+                      userId={user?.id}
+                      moderator={admin || moderator}
+                    />
                   </>
                 )}
                 {page === "Community" && (
                   <>
                     <Heading
                       eyebrow="A LITTLE INSPIRATION"
-                      title="All videos"
-                      subtitle="Search lessons and talent reels across all grades, subjects and titles."
+                      title="Video lessons"
+                      subtitle="Search video lessons across education levels, subjects and titles."
                       action={
                         <Button
                           label="Submit a video lesson"
@@ -1346,15 +1530,15 @@ function AppContent() {
                         onChangeText={setVideoSearch}
                       />
                       <Text style={s.muted}>
-                        Reviewed lessons and instantly published talent reels
-                        appear here. Keep contributions educational and
-                        respectful.
+                        Educational video lessons appear here. Talent videos
+                        have their own Share My Talent feed.
                       </Text>
                     </View>
                     {publicEntries
                       .filter(
                         (e) =>
-                          e.kind === "reel" &&
+                          (e.kind === "reel" || e.media_type === "video") &&
+                          e.video_format !== "talent" &&
                           (videoSearch.trim()
                             ? `${e.title} ${e.category} ${e.level}`
                                 .toLowerCase()
@@ -1368,67 +1552,20 @@ function AppContent() {
                 )}
                 {page === "Earnings" && (
                   <>
-                    <Heading
-                      eyebrow="YOUR CONTRIBUTION MATTERS"
-                      title="Your earnings"
-                      subtitle="A clear view of your earnings and payouts."
+                    <CreatorEarnings
+                      key={user?.id || "guest"}
+                      userId={user?.id}
                     />
-                    <View style={s.stats}>
-                      {[
-                        "Pending earnings",
-                        "Approved earnings",
-                        "Available to withdraw",
-                      ].map((t) => (
-                        <View style={s.stat} key={t}>
-                          <View>
-                            <Text style={s.small}>{t}</Text>
-                            <Text style={s.heading}>—</Text>
-                          </View>
-                        </View>
-                      ))}
-                    </View>
-                    <View style={s.card}>
-                      <Text style={s.cardTitle}>
-                        Monetization requires approval
-                      </Text>
-                      <Text style={s.muted}>
-                        Earnings are calculated from verified activity using
-                        administrator-managed rates. Live earnings and payouts
-                        are not connected in this build.
-                      </Text>
-                      <Button
-                        label="View account"
-                        onPress={() => go("Account")}
-                      />
-                    </View>
-                    <Text style={s.sectionHeading}>Transaction history</Text>
-                    <Text style={s.empty}>No transactions to display.</Text>
+                    <EarningRates />
+                    <TransactionHistory userId={user?.id} />
                   </>
                 )}
                 {page === "Premier" && (
-                  <>
-                    <Plans notify={setNotice} />
-                    <Heading
-                      eyebrow="EDUCATION FORUM PREMIER"
-                      title="Explore Premier"
-                      subtitle="More ways to learn, with benefits managed by the platform."
-                    />
-                    <View style={s.card}>
-                      <Icon name="sparkles-outline" size={32} />
-                      <Text style={s.sectionHeading}>
-                        Good things are taking shape.
-                      </Text>
-                      <Text style={s.muted}>
-                        Premier plans and prices will appear after the owner
-                        configures and activates them. No subscription is
-                        charged in this preview.
-                      </Text>
-                      <Button
-                        label="Explore free learning"
-                        onPress={() => go("Learning")}
-                      />
-                    </View>
-                  </>
+                  <Plans
+                    key={user?.id || "guest"}
+                    notify={setNotice}
+                    userId={user?.id}
+                  />
                 )}
                 {page === "Account" && (
                   <>
@@ -1443,6 +1580,31 @@ function AppContent() {
                     />
                     <View style={s.accountMenu}>
                       {[
+                        {
+                          name: "Settings",
+                          icon: "person-outline",
+                          label: "Settings and profile",
+                        },
+                        {
+                          name: "Messages",
+                          icon: "chatbubbles-outline",
+                          label: "Direct messages",
+                        },
+                        {
+                          name: "Transactions",
+                          icon: "receipt-outline",
+                          label: "My transactions",
+                        },
+                        {
+                          name: "Opportunities",
+                          icon: "heart-outline",
+                          label: "Helping and Supporting Hands",
+                        },
+                        {
+                          name: "Educators",
+                          icon: "school-outline",
+                          label: "Discover educators",
+                        },
                         {
                           name: "Earnings",
                           icon: "wallet-outline",
@@ -1528,11 +1690,7 @@ function AppContent() {
                     <PurchaseSettings userId={user?.id} />
                     <AdPrivacy />
                     <PushSettings userId={user?.id} />
-                    <CreatorEarnings
-                      key={user?.id || "guest"}
-                      userId={user?.id}
-                    />
-                    <EarningRates />
+
                     <Text style={s.sectionHeading}>My submissions</Text>
                     {[
                       {
@@ -1581,6 +1739,7 @@ function AppContent() {
                             {e.kind} ·{" "}
                             {new Date(e.created_at).toLocaleDateString()}
                           </Text>
+                          <SubmissionEditor entry={e} refreshed={refresh} />
                         </View>
                       ))}
                     <Text style={s.sectionHeading}>Saved for later</Text>
@@ -1684,6 +1843,26 @@ function AppContent() {
                       <>
                         <Management notify={setNotice} />
                         <ServiceAdministration />
+                        <VerificationCenter userId={user?.id} admin />
+                        {role === "owner" && (
+                          <>
+                            <AdminAccess userId={user?.id} owner />
+                            <StudyAssistantSettings />
+                          </>
+                        )}
+                        <QuizAdministration />
+                        <VoiceAdministration userId={user?.id} />
+                        <ChatModeration />
+                        <AccountRequestAdministration />
+                        <TransactionHistory userId={user?.id} admin />
+                        <Button
+                          label="Manage language courses"
+                          onPress={() => go("Courses")}
+                        />
+                        <Button
+                          label="Manage support cases"
+                          onPress={() => go("Opportunities")}
+                        />
                       </>
                     )}
                     <Text style={s.sectionHeading}>
@@ -1701,15 +1880,18 @@ function AppContent() {
                         <Text style={s.muted}>
                           The database includes protected plans, feature rules,
                           earnings policies, transactions, and funding
-                          agreements. Provider integrations, verified activity
-                          processing, and financial disbursement workflows
-                          remain to be implemented.
+                          agreements. Verified purchase and payout endpoints are
+                          deployed. Live payments require provider credentials
+                          and settlement testing.
                         </Text>
                       </View>
                     )}
                   </>
                 )}
               </ScrollView>
+              <Text style={{ fontSize: 10, textAlign: "center", padding: 4 }}>
+                Powered by Xenus
+              </Text>
               {!reader && !form && !auth && <BottomBanner />}
               <View
                 accessibilityRole="tablist"
@@ -1720,7 +1902,9 @@ function AppContent() {
               >
                 {tabs
                   .filter(
-                    (tab) => !coreEducationRelease || isCorePage(tab.name),
+                    (tab) =>
+                      tab.name !== "Opportunities" &&
+                      (!coreEducationRelease || isCorePage(tab.name)),
                   )
                   .map((tab) => {
                     const selected = parentTab(page) === tab.name;
@@ -1785,50 +1969,76 @@ function AppContent() {
                       secondary
                       onPress={() =>
                         void Share.share({
-                          message: `${reader.title} — ${reader.description.slice(0, 120)}`,
+                          message: `${reader.title} ${contentLink("video", reader.id)}`,
+                          url: contentLink("video", reader.id),
                         }).catch(() =>
                           setNotice("Sharing was unavailable. Please retry."),
                         )
                       }
                     />
                     <Text style={s.reading}>{reader.description}</Text>
-                    {reader.kind === "reel" && reader.file_path && (
-                      <>
-                        {reader.video_format !== "talent" && <LessonAdOffer />}
-                        <LessonVideo
-                          entryId={reader.id}
-                          path={reader.file_path}
+                    {(reader.kind === "reel" ||
+                      reader.media_type === "video") &&
+                      reader.file_path && (
+                        <>
+                          {reader.video_format !== "talent" && (
+                            <LessonAdOffer />
+                          )}
+                          <LessonVideo
+                            entryId={reader.id}
+                            path={reader.file_path}
+                            userId={user?.id}
+                          />
+                          <VideoSocial
+                            entryId={reader.id}
+                            userId={user?.id}
+                            moderator={admin || moderator}
+                          />
+                        </>
+                      )}
+                    {reader.file_path &&
+                      reader.kind !== "reel" &&
+                      reader.media_type !== "video" &&
+                      backend && (
+                        <ReadingProgress
+                          key={`${user?.id}:${reader.id}`}
                           userId={user?.id}
-                        />
-                        <VideoSocial
                           entryId={reader.id}
-                          userId={user?.id}
-                          moderator={admin || moderator}
-                        />
-                      </>
-                    )}
-                    {reader.file_path && reader.kind !== "reel" && (
-                      <Button
-                        label="Open attached file"
-                        onPress={() =>
-                          void run(async () => {
-                            if (!backend) {
-                              await Linking.openURL(reader.file_path!);
-                              return;
-                            }
-                            if (!user)
-                              throw new Error(
-                                "Sign in to open attached files.",
-                              );
-                            const { data, error } = await backend.storage
+                          open={async (page) => {
+                            const r = await backend!.storage
                               .from("submissions")
                               .createSignedUrl(reader.file_path!, 60);
-                            if (error) throw error;
-                            await Linking.openURL(data.signedUrl);
-                          })
-                        }
-                      />
-                    )}
+                            if (r.error) throw r.error;
+                            await Linking.openURL(
+                              r.data.signedUrl + "#page=" + page,
+                            );
+                          }}
+                        />
+                      )}
+                    {reader.file_path &&
+                      reader.kind !== "reel" &&
+                      reader.media_type !== "video" && (
+                        <Button
+                          label="Open attached file"
+                          onPress={() =>
+                            void run(async () => {
+                              if (!backend) {
+                                await Linking.openURL(reader.file_path!);
+                                return;
+                              }
+                              if (!user)
+                                throw new Error(
+                                  "Sign in to open attached files.",
+                                );
+                              const { data, error } = await backend.storage
+                                .from("submissions")
+                                .createSignedUrl(reader.file_path!, 60);
+                              if (error) throw error;
+                              await Linking.openURL(data.signedUrl);
+                            })
+                          }
+                        />
+                      )}
                     <Button
                       secondary
                       label={
@@ -1947,16 +2157,6 @@ function AppContent() {
                     value: description,
                     set: setDescription,
                   },
-                  {
-                    label: "Subject or category",
-                    value: subject,
-                    set: setSubject,
-                  },
-                  {
-                    label: "Author / public display name",
-                    value: author,
-                    set: setAuthor,
-                  },
                 ].map((f) => (
                   <View key={f.label}>
                     <Text style={s.label}>{f.label}</Text>
@@ -1976,6 +2176,12 @@ function AppContent() {
                     />
                   </View>
                 ))}
+                <SelectField
+                  label="Subject"
+                  value={subject}
+                  options={subjects.map((x) => ({ value: x, label: x }))}
+                  onChange={setSubject}
+                />
                 <Button
                   secondary
                   label={
@@ -1983,7 +2189,9 @@ function AppContent() {
                       ? `Attached: ${attachment.name}`
                       : form === "reel"
                         ? "Attach a video"
-                        : "Attach a PDF"
+                        : form === "course"
+                          ? "Attach a PDF or learning video"
+                          : "Attach a PDF"
                   }
                   onPress={() =>
                     void run(async () => {
@@ -1991,7 +2199,13 @@ function AppContent() {
                         type:
                           form === "reel"
                             ? ["video/mp4", "video/quicktime"]
-                            : "application/pdf",
+                            : form === "course"
+                              ? [
+                                  "application/pdf",
+                                  "video/mp4",
+                                  "video/quicktime",
+                                ]
+                              : "application/pdf",
                         copyToCacheDirectory: true,
                       });
                       if (!r.canceled) {
@@ -2017,7 +2231,9 @@ function AppContent() {
           <Modal
             visible={auth}
             animationType="slide"
-            onRequestClose={() => setAuth(false)}
+            onRequestClose={() => {
+              if (!busy) setAuth(false);
+            }}
           >
             <SafeAreaView style={s.safe}>
               <ScrollView
@@ -2033,14 +2249,17 @@ function AppContent() {
                 <Button
                   secondary
                   label="← Back"
+                  disabled={busy}
                   onPress={() => setAuth(false)}
                 />
                 <Text style={s.heading}>
                   {recovery
                     ? "Choose a new password"
-                    : signup
-                      ? "Create your account"
-                      : "Welcome back."}
+                    : pendingConfirmation
+                      ? "Check your email"
+                      : signup
+                        ? "Create your account"
+                        : "Welcome back."}
                 </Text>
                 {!backend && (
                   <Text style={s.inlineNotice}>
@@ -2048,32 +2267,63 @@ function AppContent() {
                     preview. You can still explore learning and the library.
                   </Text>
                 )}
-                <TextInput
-                  placeholderTextColor="#526477"
-                  style={s.input}
-                  placeholder="Email address"
-                  accessibilityLabel="Email"
-                  autoCapitalize="none"
-                  keyboardType="email-address"
-                  value={email}
-                  onChangeText={setEmail}
-                />
+                {pendingConfirmation && (
+                  <Text style={s.muted}>
+                    Open the confirmation link sent to {email}. Check your spam
+                    folder too. Then sign in below. If you already have an
+                    account, use your existing password.
+                  </Text>
+                )}
+                {!recovery && (
+                  <TextInput
+                    placeholderTextColor="#526477"
+                    style={s.input}
+                    placeholder="Email address"
+                    accessibilityLabel="Email"
+                    autoCapitalize="none"
+                    keyboardType="email-address"
+                    autoCorrect={false}
+                    autoComplete="email"
+                    editable={!busy}
+                    value={email}
+                    onChangeText={(value) => {
+                      setEmail(value);
+                      setPendingConfirmation(false);
+                    }}
+                  />
+                )}
                 <TextInput
                   placeholderTextColor="#526477"
                   style={s.input}
                   placeholder="Password (at least 8 characters)"
                   accessibilityLabel="Password"
-                  secureTextEntry
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  autoComplete={
+                    signup || recovery ? "new-password" : "current-password"
+                  }
+                  editable={!busy}
+                  secureTextEntry={!showPassword}
                   value={password}
                   onChangeText={setPassword}
                 />
-                {signup && !recovery && (
+                <Button
+                  secondary
+                  disabled={busy}
+                  label={showPassword ? "Hide password" : "Show password"}
+                  onPress={() => setShowPassword(!showPassword)}
+                />
+                {(signup || recovery) && (
                   <TextInput
                     placeholderTextColor="#526477"
                     accessibilityLabel="Confirm password"
                     placeholder="Confirm password"
                     style={s.input}
-                    secureTextEntry
+                    secureTextEntry={!showPassword}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    autoComplete="new-password"
+                    editable={!busy}
                     value={confirmation}
                     onChangeText={setConfirmation}
                   />
@@ -2083,8 +2333,6 @@ function AppContent() {
                     {[
                       ["Name", firstName, setFirstName],
                       ["Surname", surname, setSurname],
-                      ["Date of birth (YYYY-MM-DD)", birthDate, setBirthDate],
-                      ["Country", country, setCountry],
                     ].map(([label, value, setter]) => (
                       <TextInput
                         key={label as string}
@@ -2096,25 +2344,83 @@ function AppContent() {
                         onChangeText={setter as (v: string) => void}
                       />
                     ))}
+                    <TextInput
+                      accessibilityLabel="Username"
+                      placeholder="Choose a username (without ?)"
+                      value={username}
+                      onChangeText={setUsername}
+                      autoCapitalize="none"
+                      style={s.input}
+                    />
+                    <DateField value={birthDate} onChange={setBirthDate} />
+                    <SelectField
+                      label="Country"
+                      value={educationSystem}
+                      options={educationCatalog.systems.map((x) => ({
+                        value: x.code,
+                        label: x.name,
+                      }))}
+                      onChange={(v) => {
+                        setEducationSystem(v);
+                        setCountry(
+                          educationCatalog.systems.find((x) => x.code === v)!
+                            .name,
+                        );
+                        setEducationLevel("");
+                        setSignupGrade(null);
+                      }}
+                    />
                     <Text style={s.label}>I am a {accountType}</Text>
                     <View style={s.row}>
-                      {["student", "teacher"].map((type) => (
+                      {["student", "teacher", "admin"].map((type) => (
                         <Button
                           key={type}
-                          label={type === "teacher" ? "Teacher" : "Student"}
+                          label={
+                            type === "admin"
+                              ? "Admin"
+                              : type === "teacher"
+                                ? "Teacher"
+                                : "Student"
+                          }
                           secondary={accountType !== type}
                           onPress={() => setAccountType(type)}
                         />
                       ))}
                     </View>
-                    <Text style={s.label}>Your grade</Text>
-                    <GradePicker
-                      value={signupGrade}
-                      onChange={setSignupGrade}
+                    <SelectField
+                      label="Education level"
+                      value={educationLevel}
+                      options={educationCatalog
+                        .levelsForSystem(educationSystem)
+                        .map((x) => ({ value: x.label, label: x.label }))}
+                      onChange={(v) => {
+                        setEducationLevel(v);
+                        setSignupGrade(
+                          canonicalGrade(
+                            educationCatalog
+                              .levelsForSystem(educationSystem)
+                              .find((x) => x.label === v)!.ordinal,
+                          ),
+                        );
+                      }}
                     />
+                    {accountType === "admin" && (
+                      <Text>
+                        Admin access requires owner approval. Confirm your
+                        email, then track your request in Settings.
+                      </Text>
+                    )}
+                    {accountType === "teacher" && (
+                      <Text>
+                        Your teacher status remains pending until your ID and
+                        teaching video are reviewed. Submit them in Settings
+                        after confirming your email.
+                      </Text>
+                    )}
                   </View>
                 )}
                 <Button
+                  disabled={busy}
                   label={
                     busy
                       ? "Please wait…"
@@ -2127,11 +2433,13 @@ function AppContent() {
                   onPress={() => {
                     if (!busy)
                       void run(async () => {
-                        if (recovery && password.length < 8)
-                          throw new Error(
-                            "Use at least 8 characters for your password.",
-                          );
+                        if (recovery)
+                          validateNewPassword(password, confirmation);
                         if (signup && !recovery) {
+                          if (!/^[a-z0-9_]{3,40}$/i.test(username.trim()))
+                            throw new Error(
+                              "Choose a username with 3-40 letters, numbers or underscores.",
+                            );
                           if (
                             !firstName.trim() ||
                             !surname.trim() ||
@@ -2170,34 +2478,52 @@ function AppContent() {
                           });
                           if (error) throw error;
                           setRecovery(false);
+                          setConfirmation("");
+                          setShowPassword(false);
                           setPassword("");
                           setAuth(false);
                           setNotice("Your password has been updated.");
                           return;
                         }
                         const { data, error } = signup
-                          ? await backend!.auth.signUp({
-                              email: normalizedEmail,
-                              password,
-                              options: {
-                                emailRedirectTo: authRedirect,
-                                data: {
-                                  grade: signupGrade,
-                                  first_name: firstName.trim(),
-                                  surname: surname.trim(),
-                                  date_of_birth: birthDate,
-                                  country: country.trim(),
-                                  account_type: accountType,
+                          ? await emailRequest(normalizedEmail, () =>
+                              backend!.auth.signUp({
+                                email: normalizedEmail,
+                                password,
+                                options: {
+                                  emailRedirectTo: authRedirect,
+                                  data: {
+                                    grade: signupGrade,
+                                    first_name: firstName.trim(),
+                                    surname: surname.trim(),
+                                    date_of_birth: birthDate,
+                                    country: country.trim(),
+                                    account_type: accountType,
+                                    username: username.trim().toLowerCase(),
+                                    education_system: educationSystem,
+                                    education_level: educationLevel,
+                                  },
                                 },
-                              },
-                            })
+                              }),
+                            )
                           : await backend!.auth.signInWithPassword({
                               email: normalizedEmail,
                               password,
                             });
                         if (error) throw error;
-                        setAuth(false);
                         setPassword("");
+                        setConfirmation("");
+                        setShowPassword(false);
+                        if (signup && !data.session) {
+                          setSignup(false);
+                          setPendingConfirmation(true);
+                          setNotice(
+                            "Check your inbox for a confirmation link. If your account is already confirmed, sign in below.",
+                          );
+                          return;
+                        }
+                        setPendingConfirmation(false);
+                        setAuth(false);
                         setNotice(
                           signup && !data.session
                             ? "Check your email to confirm your account, then log in."
@@ -2211,6 +2537,7 @@ function AppContent() {
                 {!recovery && (
                   <Button
                     secondary
+                    disabled={busy}
                     label={
                       signup
                         ? "Already have an account? Sign in"
@@ -2218,6 +2545,8 @@ function AppContent() {
                     }
                     onPress={() => {
                       setSignup(!signup);
+                      setPendingConfirmation(false);
+                      setShowPassword(false);
                       setPassword("");
                       setConfirmation("");
                       setNotice("");
@@ -2227,6 +2556,35 @@ function AppContent() {
                 {!recovery && !signup && (
                   <Button
                     secondary
+                    disabled={busy}
+                    label="Resend confirmation email"
+                    onPress={() =>
+                      void run(async () => {
+                        if (!backend)
+                          throw new Error(
+                            "Account service is not connected yet.",
+                          );
+                        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim()))
+                          throw new Error("Enter a valid email address.");
+                        const { error } = await emailRequest(email, () =>
+                          backend!.auth.resend({
+                            type: "signup",
+                            email: email.trim(),
+                            options: { emailRedirectTo: authRedirect },
+                          }),
+                        );
+                        if (error) throw error;
+                        setNotice(
+                          "If your account needs confirmation, a link has been requested. Check your inbox and spam folder.",
+                        );
+                      })
+                    }
+                  />
+                )}
+                {!recovery && !signup && (
+                  <Button
+                    secondary
+                    disabled={busy}
                     label="Send password reset email"
                     onPress={() =>
                       void run(async () => {
@@ -2236,13 +2594,15 @@ function AppContent() {
                           );
                         if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim()))
                           throw new Error("Enter a valid email address.");
-                        const { error } =
-                          await backend.auth.resetPasswordForEmail(
-                            email.trim(),
-                            { redirectTo: authRedirect },
-                          );
+                        const { error } = await emailRequest(email, () =>
+                          backend!.auth.resetPasswordForEmail(email.trim(), {
+                            redirectTo: authRedirect,
+                          }),
+                        );
                         if (error) throw error;
-                        setNotice("Password reset email requested.");
+                        setNotice(
+                          "If an account exists for this email, a reset link has been requested. Check your inbox and spam folder before trying again.",
+                        );
                       })
                     }
                   />

@@ -146,7 +146,7 @@ assert.equal(
 );
 await assert.rejects(
   () => asUser(student, "select set_my_grade('Grade 99')"),
-  /check constraint/,
+  /Choose your education level/,
 );
 const signupUser = "77777777-7777-4777-8777-777777777777";
 await db.exec(
@@ -253,7 +253,7 @@ await assert.rejects(
       student,
       `select respond_to_support('${request}','Fake staff response','answered')`,
     ),
-  /Administrator permission/,
+  /Approved Safe Room responder permission/,
 );
 await asUser(
   admin,
@@ -266,11 +266,11 @@ assert.equal(
 await db.exec(`update profiles set suspended=true where id='${student}'`);
 await assert.rejects(
   () => asUser(student, `select join_classroom('${room.join_code}')`),
-  /active account/,
+  /active account/i,
 );
 await assert.rejects(
   () => asUser(student, "select set_my_grade('Form 5')"),
-  /active account/,
+  /active account/i,
 );
 assert.equal(
   (await asUser(student, "select * from support_requests")).rows.length,
@@ -291,9 +291,14 @@ assert.equal(
     .points,
   10,
 );
+assert.equal(
+  (await asUser(student, "select answer_quiz(1,0) result")).rows[0].result
+    .points,
+  10,
+);
 await assert.rejects(
-  () => asUser(student, "select answer_quiz(1,1)"),
-  /duplicate key/,
+  () => asUser(student, "select answer_quiz(2,null)"),
+  /Invalid question or answer/,
 );
 await assert.rejects(
   () => asUser(student, "insert into quiz_answers values(auth.uid(),2,1,9999)"),
@@ -350,12 +355,22 @@ assert.equal(
   ).rows.length,
   0,
 );
+await assert.rejects(
+  () =>
+    asUser(
+      student,
+      `insert into classrooms(owner_id,title,grade) values('${student}','Student denied room','Form 4')`,
+    ),
+  /row-level security/,
+);
+await db.query(`update profiles set role='teacher' where id='${student}'`);
 const paid = (
   await asUser(
     student,
     `insert into classrooms(owner_id,title,grade,price_minor) values('${student}','Paid maths class','Form 4',100) returning *`,
   )
 ).rows[0];
+await db.query(`update profiles set role='student' where id='${student}'`);
 await assert.rejects(
   () => asUser(other, `select join_classroom('${paid.join_code}')`),
   /verified purchase/,
@@ -507,6 +522,629 @@ await db.query(
 assert.equal(
   (await db.query(`select * from claim_payout('${payout}')`)).rows.length,
   0,
+);
+// Feature workflows: exercise real authorization boundaries, not only schema presence.
+await db.exec("update profiles set suspended=false");
+await asUser(
+  student,
+  "select update_my_profile('Test learner','Test','Learner','Zimbabwe','Private profile bio',false)",
+);
+assert.equal(
+  (await asUser(student, "select role from profiles where id=auth.uid()"))
+    .rows[0].role,
+  "student",
+);
+await assert.rejects(
+  () =>
+    asUser(
+      student,
+      `select set_educator_role('${other}','teacher','self promotion')`,
+    ),
+  /Administrator/,
+);
+await asUser(
+  admin,
+  `select set_educator_role('${other}','creator','Staff verification completed')`,
+);
+await asUser(
+  other,
+  "select update_my_profile('Verified teacher','Test','Teacher','Zimbabwe','Science lessons',true)",
+);
+await db.exec("set role anon");
+const directory = (await db.query("select * from educator_directory()")).rows;
+assert.equal(directory.length, 1);
+assert.equal(directory[0].display_name, "Verified teacher");
+assert.equal("country" in directory[0], false);
+await db.exec("reset role");
+await asUser(student, `select follow_educator('${other}',true)`);
+await asUser(student, `select follow_educator('${other}',true)`);
+assert.equal(
+  (await asUser(student, "select * from educator_follows")).rows.length,
+  1,
+);
+assert.equal(
+  (await asUser(other, "select * from educator_follows")).rows.length,
+  0,
+);
+await asUser(
+  student,
+  "insert into language_reviews(user_id,unit_key) values(auth.uid(),'French:0')",
+);
+assert.equal(
+  (await asUser(other, "select * from language_reviews")).rows.length,
+  0,
+);
+await assert.rejects(
+  () =>
+    asUser(
+      other,
+      `insert into language_reviews(user_id,unit_key) values('${student}','French:1')`,
+    ),
+  /row-level security/,
+);
+const revised = "99999999-1111-4111-8111-111111111111";
+await asUser(
+  student,
+  `insert into entries(id,owner_id,kind,title,description,category,author,level) values('${revised}',auth.uid(),'book','Original title','A meaningful original description','Science','Test','Form 4')`,
+);
+await asUser(
+  student,
+  `select revise_submission('${revised}','Revised title','A meaningful revised description for review')`,
+);
+await assert.rejects(
+  () =>
+    asUser(
+      other,
+      `select revise_submission('${revised}','Stolen title','A meaningful description from a different learner')`,
+    ),
+  /Only your/,
+);
+await asUser(
+  student,
+  `insert into reader_progress(user_id,entry_id,page) values(auth.uid(),'${revised}',12)`,
+);
+assert.equal(
+  (await asUser(other, "select * from reader_progress")).rows.length,
+  0,
+);
+await asUser(
+  student,
+  "insert into account_requests(user_id,kind,message) values(auth.uid(),'deletion','Please delete my account')",
+);
+assert.equal(
+  (await asUser(other, "select * from account_requests")).rows.length,
+  0,
+);
+await assert.rejects(
+  () =>
+    asUser(
+      student,
+      "insert into account_requests(user_id,kind,message) values(auth.uid(),'deletion','Duplicate request')",
+    ),
+  /duplicate key/,
+);
+const accountRequest = (
+  await asUser(student, "select id from account_requests")
+).rows[0].id;
+await assert.rejects(
+  () =>
+    asUser(
+      student,
+      `select respond_account_request('${accountRequest}','pretend reply','answered')`,
+    ),
+  /Administrator/,
+);
+await asUser(
+  admin,
+  `select respond_account_request('${accountRequest}','We are reviewing this deletion request','processing')`,
+);
+const lessonId = "99999999-2222-4222-8222-222222222222";
+await asUser(
+  admin,
+  `insert into lessons(id,language_id,title,level,content,active) select '${lessonId}',id,'French practice','beginner','{"body":"A real lesson with meaningful learning content","question":"Hello in French?","answer":"Bonjour"}',true from languages where name='French'`,
+);
+const paidPlan = (
+  await asUser(
+    admin,
+    "select configure_plan(null,'Course access',500,'USD','[\"Language courses\"]',true,'Add test plan') id",
+  )
+).rows[0].id;
+await asUser(
+  admin,
+  `select save_plan_product('${paidPlan}','test-course-plan','test-course-entitlement','Map verified product')`,
+);
+await asUser(
+  admin,
+  `select save_feature_access('language_courses','subscription','${paidPlan}',null,'Require verified plan')`,
+);
+assert.equal(
+  (await asUser(student, `select * from lessons where id='${lessonId}'`)).rows
+    .length,
+  0,
+);
+await assert.rejects(
+  () =>
+    asUser(
+      student,
+      "insert into purchase_access(user_id,product_id) values(auth.uid(),'test-course-plan')",
+    ),
+  /row-level security|permission denied/,
+);
+await db.exec(
+  `select sync_purchase_access('${student}','[{"product_id":"test-course-plan","expires_at":null}]',now())`,
+);
+assert.equal(
+  (await asUser(student, `select * from lessons where id='${lessonId}'`)).rows
+    .length,
+  1,
+);
+assert.equal(
+  (await asUser(other, `select * from lessons where id='${lessonId}'`)).rows
+    .length,
+  0,
+);
+await asUser(
+  admin,
+  "select save_feature_access('language_courses','free',null,null,'Restore free access')",
+);
+await asUser(
+  admin,
+  `select save_store_product('test-course-plan','test-course-entitlement','${room.id}','Change product target')`,
+);
+assert.equal(
+  (
+    await db.query(
+      "select plan_id from store_products where product_id='test-course-plan'",
+    )
+  ).rows[0].plan_id,
+  null,
+);
+await db.query(
+  `update profiles set account_type='teacher' where id='${student}'`,
+);
+await db.query(
+  "insert into earnings_policies(role,view_rate,minimum_payout_minor,currency,active) values('teacher',99,1,'USD',true)",
+);
+await asUser(other, `select begin_content_usage('${book}')`);
+assert.equal(
+  Number(
+    (
+      await db.query(
+        `select rate from content_usage where entry_id='${book}' and viewer_id='${other}'`,
+      )
+    ).rows[0].rate,
+  ),
+  0.025,
+);
+await assert.rejects(
+  () =>
+    asUser(
+      student,
+      `select manage_funding('${aid}','agreement',500,'USD','Proposed terms','Unauthorised funding')`,
+    ),
+  /Administrator/,
+);
+const fundingCase = (
+  await asUser(
+    admin,
+    `select manage_funding('${aid}','negotiation',500,'USD','Proposed support terms','Reviewed support need') id`,
+  )
+).rows[0].id;
+await asUser(
+  student,
+  `insert into funding_messages(agreement_id,author_id,body) values('${fundingCase}',auth.uid(),'A private case update')`,
+);
+assert.equal(
+  (await asUser(other, "select * from funding_messages")).rows.length,
+  0,
+);
+await assert.rejects(
+  () =>
+    asUser(
+      other,
+      `insert into funding_messages(agreement_id,author_id,body) values('${fundingCase}',auth.uid(),'Unrelated learner update')`,
+    ),
+  /row-level security/,
+);
+await asUser(
+  admin,
+  `select manage_funding('${aid}','completed',500,'USD','Proposed support terms','Case review completed')`,
+);
+await assert.rejects(
+  () =>
+    asUser(
+      student,
+      `insert into funding_messages(agreement_id,author_id,body) values('${fundingCase}',auth.uid(),'Closed case update')`,
+    ),
+  /row-level security/,
+);
+// Expanded requirements: international equivalence, communication and verified staff.
+await asUser(student, "select set_my_education('GB','Year 12')");
+assert.deepEqual(
+  (
+    await asUser(
+      student,
+      "select grade,education_ordinal from profiles where id=auth.uid()",
+    )
+  ).rows[0],
+  { grade: "Form 5", education_ordinal: 12 },
+);
+await asUser(student, "select set_my_identity('quiz_learner',null)");
+await assert.rejects(
+  () => asUser(other, "select set_my_identity('QUIZ_LEARNER',null)"),
+  /duplicate key/,
+);
+await assert.rejects(
+  () =>
+    asUser(
+      other,
+      `select set_my_identity('another_name','${student}/photo.png')`,
+    ),
+  /own profile picture/,
+);
+const dm = (
+  await asUser(
+    student,
+    `insert into direct_messages(sender_id,recipient_id,body) values(auth.uid(),'${other}','Private test message') returning id`,
+  )
+).rows[0].id;
+assert.equal(
+  (await asUser(existingUser, "select * from direct_messages")).rows.length,
+  0,
+);
+assert.equal(
+  (await asUser(other, "select * from direct_messages")).rows.length,
+  1,
+);
+await asUser(
+  other,
+  `insert into user_blocks(user_id,blocked_id) values(auth.uid(),'${student}')`,
+);
+await assert.rejects(
+  () =>
+    asUser(
+      student,
+      `insert into direct_messages(sender_id,recipient_id,body) values(auth.uid(),'${other}','Blocked message')`,
+    ),
+  /row-level security/,
+);
+await assert.rejects(
+  () =>
+    asUser(
+      existingUser,
+      `insert into chat_reports(reporter_id,direct_message,reason) values(auth.uid(),'${dm}','Cannot report an unread private conversation')`,
+    ),
+  /row-level security/,
+);
+await asUser(
+  other,
+  `insert into chat_reports(reporter_id,direct_message,reason) values(auth.uid(),'${dm}','Reported message for moderator review')`,
+);
+assert.equal(
+  (await asUser(admin, "select * from reported_messages()")).rows.length,
+  1,
+);
+await asUser(
+  student,
+  `insert into staff_applications(user_id,kind,subject,statement,id_path,video_path) values(auth.uid(),'teacher','Science','I have experience teaching science lessons','${student}/id.png','${student}/teaching.mp4')`,
+);
+const application = (
+  await asUser(
+    student,
+    "select id from staff_applications where kind='teacher'",
+  )
+).rows[0].id;
+await assert.rejects(
+  () =>
+    asUser(
+      student,
+      `select review_staff('${application}',true,'Approve myself')`,
+    ),
+  /Administrator/,
+);
+assert.equal(
+  (await asUser(other, "select * from staff_applications")).rows.length,
+  0,
+);
+await asUser(
+  admin,
+  `select review_staff('${application}',true,'Identity and teaching demonstration reviewed')`,
+);
+assert.equal(
+  (await asUser(student, "select role from profiles where id=auth.uid()"))
+    .rows[0].role,
+  "teacher",
+);
+const verifiedPost = "99999999-3333-4333-8333-333333333333";
+await asUser(
+  student,
+  `insert into entries(id,owner_id,kind,title,description,category,author,level) values('${verifiedPost}',auth.uid(),'course','Verified teacher post','An automatically published verified teacher lesson','Science','Forged author','Form 5')`,
+);
+assert.equal(
+  (await db.query(`select status from entries where id='${verifiedPost}'`))
+    .rows[0].status,
+  "approved",
+);
+assert.notEqual(
+  (await db.query(`select author from entries where id='${verifiedPost}'`))
+    .rows[0].author,
+  "Forged author",
+);
+await db.exec(`update profiles set role='student' where id='${student}'`);
+// Harness broad grants are removed here to also exercise the production column grants.
+await db.exec(
+  "revoke all on quiz_sets,direct_messages from authenticated; grant select(id,user_id,group_id,category,month,cursor,score,correct_count,status,started_at,finished_at,elapsed_ms) on quiz_sets to authenticated; grant select,insert on direct_messages to authenticated; grant update(read_at) on direct_messages to authenticated",
+);
+await assert.rejects(
+  () =>
+    asUser(
+      other,
+      `update direct_messages set body='Tampered' where id='${dm}'`,
+    ),
+  /permission denied/,
+);
+assert.equal((await asUser(student, "select * from quiz_bank")).rows.length, 0);
+const timedSet = (await asUser(student, "select start_quiz('hard') id")).rows[0]
+  .id;
+await assert.rejects(
+  () =>
+    asUser(student, `select snapshot from quiz_sets where id='${timedSet}'`),
+  /permission denied/,
+);
+await assert.rejects(
+  () => asUser(other, `select quiz_next('${timedSet}')`),
+  /not found/,
+);
+const snapshot = (
+  await db.query(`select snapshot from quiz_sets where id='${timedSet}'`)
+).rows[0].snapshot;
+assert.equal(snapshot.length, 10);
+assert.equal(new Set(snapshot.map((q) => q.id)).size, 10);
+for (let n = 0; n < 10; n++) {
+  const issued = (await asUser(student, `select quiz_next('${timedSet}') q`))
+    .rows[0].q;
+  assert.equal(issued.position, n);
+  assert.equal("correct" in issued, false);
+  if (n === 0)
+    await db.query(
+      `update quiz_sets set issued_at=now()-interval '31 seconds' where id='${timedSet}'`,
+    );
+  const answer = (
+    await asUser(
+      student,
+      `select submit_quiz_answer('${timedSet}',${n},${snapshot[n].correct}) r`,
+    )
+  ).rows[0].r;
+  assert.equal(answer.points, n === 0 ? -3 : 10);
+  if (n === 0)
+    assert.deepEqual(
+      (
+        await asUser(
+          student,
+          `select submit_quiz_answer('${timedSet}',0,${snapshot[0].correct}) r`,
+        )
+      ).rows[0].r,
+      answer,
+    );
+}
+assert.equal(
+  (await asUser(student, "select * from timed_quiz_leaderboard('hard')"))
+    .rows[0].points,
+  87,
+);
+const nextSet = (await asUser(student, "select start_quiz('hard') id")).rows[0]
+  .id;
+const nextSnapshot = (
+  await db.query(`select snapshot from quiz_sets where id='${nextSet}'`)
+).rows[0].snapshot;
+assert.equal(
+  nextSnapshot.some((q) => snapshot.some((old) => old.id === q.id)),
+  false,
+  "Hard questions cannot be farmed repeatedly in one month",
+);
+const prior = (
+  await db.query(
+    "select (date_trunc('month',now() at time zone 'UTC')-interval '1 month')::date::text as period",
+  )
+).rows[0].period;
+await db.query(`update quiz_sets set month='${prior}' where id='${timedSet}'`);
+await asUser(admin, `select close_quiz_month('${prior}')`);
+await asUser(admin, `select close_quiz_month('${prior}')`);
+const reward = (
+  await db.query(`select * from quiz_monthly_rewards where month='${prior}'`)
+).rows;
+assert.equal(reward.length, 1);
+assert.equal(reward[0].amount_minor, 1500);
+await assert.rejects(
+  () =>
+    asUser(
+      student,
+      `select review_quiz_reward('${reward[0].id}',true,'Self credit attempt')`,
+    ),
+  /Administrator/,
+);
+await asUser(
+  admin,
+  `select review_quiz_reward('${reward[0].id}',true,'Competition results verified')`,
+);
+await assert.rejects(
+  () =>
+    asUser(
+      admin,
+      `select review_quiz_reward('${reward[0].id}',true,'Duplicate credit attempt')`,
+    ),
+  /Pending reward not found/,
+);
+assert.equal(
+  (
+    await db.query(
+      `select count(*)::int count from creator_ledger where quiz_reward_id='${reward[0].id}'`,
+    )
+  ).rows[0].count,
+  1,
+);
+
+// Admin signup never trusts role metadata; only an active owner may approve.
+const applicant = "aaaabbbb-1111-4111-8111-111111111111";
+const rejectedApplicant = "aaaabbbb-2222-4222-8222-222222222222";
+await db.exec(`insert into auth.users(id,raw_user_meta_data) values
+ ('${applicant}','{"account_type":"admin","role":"owner","username":"admin_candidate"}'),
+ ('${rejectedApplicant}','{"account_type":"admin","username":"admin_rejected"}');`);
+assert.equal(
+  (await db.query(`select role from profiles where id='${applicant}'`)).rows[0]
+    .role,
+  "student",
+);
+assert.equal(
+  (await asUser(applicant, "select * from admin_access_requests")).rows.length,
+  1,
+);
+assert.equal(
+  (await asUser(other, "select * from admin_access_requests")).rows.length,
+  0,
+);
+await assert.rejects(
+  () =>
+    asUser(
+      applicant,
+      `select review_admin_access('${applicant}',true,'Self promotion')`,
+    ),
+  /Owner permission/,
+);
+await assert.rejects(
+  () =>
+    asUser(
+      applicant,
+      `insert into admin_access_requests(user_id,status) values('${other}','approved')`,
+    ),
+  /row-level security|permission denied/,
+);
+await asUser(
+  applicant,
+  `update admin_access_requests set status='approved' where user_id='${applicant}'`,
+);
+assert.equal(
+  (
+    await db.query(
+      `select status from admin_access_requests where user_id='${applicant}'`,
+    )
+  ).rows[0].status,
+  "pending",
+);
+await db.exec(`update profiles set suspended=false where id='${admin}';`);
+await assert.rejects(
+  () => asUser(admin, `select review_admin_access('${applicant}',true,'')`),
+  /Explain your decision/,
+);
+await db.exec(`update profiles set suspended=true where id='${applicant}'`);
+await assert.rejects(
+  () =>
+    asUser(
+      admin,
+      `select review_admin_access('${applicant}',true,'Reviewed applicant')`,
+    ),
+  /active non-administrative/,
+);
+await db.exec(`update profiles set suspended=false where id='${applicant}'`);
+await asUser(
+  admin,
+  `select review_admin_access('${applicant}',true,'Verified staff identity')`,
+);
+assert.equal(
+  (await asUser(applicant, "select is_admin() allowed")).rows[0].allowed,
+  true,
+);
+await assert.rejects(
+  () =>
+    asUser(
+      applicant,
+      `select review_admin_access('${rejectedApplicant}',true,'Admin cannot grant access')`,
+    ),
+  /Owner permission/,
+);
+await assert.rejects(
+  () =>
+    asUser(
+      admin,
+      `select review_admin_access('${applicant}',true,'Duplicate approval')`,
+    ),
+  /Pending request/,
+);
+await asUser(
+  admin,
+  `select review_admin_access('${rejectedApplicant}',false,'Not authorised staff')`,
+);
+assert.equal(
+  (await db.query(`select role from profiles where id='${rejectedApplicant}'`))
+    .rows[0].role,
+  "student",
+);
+assert.equal(
+  (
+    await db.query(
+      `select count(*)::int n from audit_log where entity_id='${applicant}' and action='admin_access.approved'`,
+    )
+  ).rows[0].n,
+  1,
+);
+console.log(
+  "PASS: admin signup, isolation, owner-only review, suspension, rejection, audit and duplicate protection.",
+);
+
+// Study AI quota is service-only; owner settings and usage rows stay protected.
+const aiStudent = "aaaabbbb-3333-4333-8333-333333333333";
+await db.exec(`insert into auth.users(id) values('${aiStudent}');`);
+async function reserveAI(id) {
+  await db.exec("set role service_role");
+  try {
+    return await db.query(`select reserve_study_ai('${id}') remaining`);
+  } finally {
+    await db.exec("reset role");
+  }
+}
+await assert.rejects(
+  () => asUser(aiStudent, `select reserve_study_ai('${aiStudent}')`),
+  /permission denied/,
+);
+await assert.rejects(
+  () => asUser(aiStudent, "select configure_study_ai(true,2,3)"),
+  /Owner permission/,
+);
+await assert.rejects(() => reserveAI(aiStudent), /AI_DISABLED/);
+await asUser(admin, "select configure_study_ai(true,2,3)");
+assert.equal((await reserveAI(aiStudent)).rows[0].remaining, 1);
+await assert.rejects(() => reserveAI(aiStudent), /AI_TOO_FAST/);
+assert.equal(
+  (await asUser(aiStudent, "select * from study_ai_usage")).rows.length,
+  1,
+);
+assert.equal(
+  (await asUser(other, "select * from study_ai_usage")).rows.length,
+  0,
+);
+await asUser(aiStudent, "update study_ai_usage set requests=1");
+await asUser(aiStudent, "update study_ai_settings set daily_user_limit=50");
+assert.equal(
+  (await db.query("select daily_user_limit from study_ai_settings")).rows[0]
+    .daily_user_limit,
+  2,
+);
+await db.exec(
+  `update study_ai_usage set last_request_at=now()-interval '20 seconds' where user_id='${aiStudent}'`,
+);
+assert.equal((await reserveAI(aiStudent)).rows[0].remaining, 0);
+await db.exec(
+  `update study_ai_usage set last_request_at=now()-interval '20 seconds' where user_id='${aiStudent}'`,
+);
+await assert.rejects(() => reserveAI(aiStudent), /AI_DAILY_LIMIT/);
+await reserveAI(rejectedApplicant);
+await assert.rejects(() => reserveAI(admin), /AI_DAILY_LIMIT/);
+await db.exec(`update profiles set suspended=true where id='${aiStudent}'`);
+await assert.rejects(() => reserveAI(aiStudent), /AI_ACCOUNT_INACTIVE/);
+await asUser(admin, "select configure_study_ai(false,10,100)");
+await assert.rejects(() => reserveAI(admin), /AI_DISABLED/);
+console.log(
+  "PASS: AI disabled default, owner configuration, service-only atomic quotas, isolation, cooldown, daily caps and suspended accounts.",
 );
 await db.close();
 console.log(

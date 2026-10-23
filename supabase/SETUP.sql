@@ -452,5 +452,565 @@ revoke all on function creator_summary(),save_store_product(text,text,uuid,text)
 grant execute on function creator_summary(),save_store_product(text,text,uuid,text) to authenticated;
 
 
+-- 005_quiz_retry.sql
+-- Network retries must return the original score, never award points twice.
+create or replace function public.answer_quiz(question integer,selected integer) returns jsonb
+language plpgsql security definer set search_path=public as $$
+declare q quiz_questions; earned integer; begin
+ if not public.is_active() then raise exception 'Sign in to earn Guru Student points'; end if;
+ select * into q from quiz_questions where id=question;
+ if not found or selected is null or selected<0 or selected>=jsonb_array_length(q.choices) then
+   raise exception 'Invalid question or answer';
+ end if;
+ earned:=case when q.answer=selected then 10 else 0 end;
+ insert into quiz_answers values(auth.uid(),question,selected,earned) on conflict(user_id,question_id) do nothing;
+ select points into earned from quiz_answers where user_id=auth.uid() and question_id=question;
+ return jsonb_build_object('points',earned,'explanation',q.explanation);
+end $$;
+revoke all on function public.answer_quiz(integer,integer) from public,anon;
+grant execute on function public.answer_quiz(integer,integer) to authenticated;
+
+
+-- 006_feature_workflows.sql
+-- Account, learning and submission workflows. Monetary records remain server-only.
+alter table profiles add column bio text not null default '' check(length(bio)<=1000),
+ add column discoverable boolean not null default false;
+create function update_my_profile(public_name text,given_name text,family_name text,home_country text,biography text,listed boolean)
+returns void language plpgsql security definer set search_path=public as $$ begin
+ if not is_active() then raise exception 'Sign in with an active account'; end if;
+ if public_name is null or length(trim(public_name)) not between 2 and 100 or given_name is null or length(trim(given_name)) not between 1 and 100 or family_name is null or length(trim(family_name)) not between 1 and 100 or home_country is null or length(trim(home_country)) not between 1 and 100 or biography is null or length(biography)>1000 or listed is null then raise exception 'Check your profile fields'; end if;
+ update profiles set display_name=trim(public_name),first_name=trim(given_name),surname=trim(family_name),country=trim(home_country),bio=trim(biography),discoverable=listed where id=auth.uid();
+end $$;
+create table educator_follows(follower_id uuid references profiles on delete cascade,educator_id uuid references profiles on delete cascade,primary key(follower_id,educator_id),check(follower_id<>educator_id));
+alter table educator_follows enable row level security;
+create policy follows_own on educator_follows for select to authenticated using(follower_id=auth.uid());
+create policy follows_add on educator_follows for insert to authenticated with check(follower_id=auth.uid() and is_active() and exists(select 1 from profiles where id=educator_id and discoverable and role in ('teacher','tutor','creator') and not suspended));
+-- Directory access is a restricted projection; never expose birthday/country/private fields.
+create function educator_directory() returns table(id uuid,display_name text,bio text,role user_role,followers bigint)
+language sql stable security definer set search_path=public as $$ select p.id,p.display_name,p.bio,p.role,(select count(*) from educator_follows f where f.educator_id=p.id) from profiles p where p.discoverable and p.role in ('teacher','tutor','creator') and not p.suspended order by p.display_name limit 200 $$;
+create function follow_educator(educator uuid,following boolean) returns void language plpgsql security definer set search_path=public as $$ begin
+ if not is_active() or educator=auth.uid() or following is null then raise exception 'Sign in and choose another educator'; end if;
+ if following then
+  if not exists(select 1 from profiles where id=educator and discoverable and role in ('teacher','tutor','creator') and not suspended) then raise exception 'Educator is unavailable'; end if;
+  insert into educator_follows values(auth.uid(),educator) on conflict do nothing;
+ else delete from educator_follows where follower_id=auth.uid() and educator_id=educator; end if;
+end $$;
+create function set_educator_role(target_user uuid,new_role user_role,reason text) returns void language plpgsql security definer set search_path=public as $$ begin
+ if not is_admin() then raise exception 'Administrator permission required'; end if;
+ if new_role is null or new_role not in ('student','teacher','tutor','creator') or reason is null or length(trim(reason))<3 then raise exception 'Choose an educator role and add a reason'; end if;
+ update profiles set role=new_role where id=target_user and role not in ('owner','admin');
+ if not found then raise exception 'This account cannot be changed here'; end if;
+ insert into audit_log(actor_id,entity_id,action,reason) values(auth.uid(),target_user,'profile.role',trim(reason));
+end $$;
+
+create table reader_progress(user_id uuid references profiles on delete cascade,entry_id uuid references entries on delete cascade,page integer not null check(page between 1 and 100000),updated_at timestamptz not null default now(),primary key(user_id,entry_id));
+alter table reader_progress enable row level security;
+create policy reading_own on reader_progress for all to authenticated using(user_id=auth.uid() and is_active()) with check(user_id=auth.uid() and is_active() and exists(select 1 from entries where id=entry_id and (status='approved' or owner_id=auth.uid())));
+create table language_reviews(user_id uuid references profiles on delete cascade,unit_key text check(length(unit_key) between 1 and 100),completed_at timestamptz not null default now(),primary key(user_id,unit_key));
+alter table language_reviews enable row level security;
+create policy reviews_own on language_reviews for all to authenticated using(user_id=auth.uid() and is_active()) with check(user_id=auth.uid() and is_active());
+grant select,insert,update,delete on reader_progress,language_reviews to authenticated;
+grant select on educator_follows to authenticated;
+
+create table account_requests(id uuid primary key default gen_random_uuid(),user_id uuid not null references profiles on delete cascade,kind text not null check(kind in ('deletion','support')),message text not null check(length(trim(message)) between 3 and 2000),status text not null default 'open' check(status in ('open','processing','answered','cancelled')),response text not null default '',created_at timestamptz not null default now());
+create unique index one_open_deletion on account_requests(user_id) where kind='deletion' and status in ('open','processing');
+alter table account_requests enable row level security;
+create policy account_requests_read on account_requests for select to authenticated using(user_id=auth.uid() or is_admin());
+create policy account_requests_add on account_requests for insert to authenticated with check(user_id=auth.uid() and status='open' and response='');
+grant select,insert on account_requests to authenticated;
+create function respond_account_request(request_id uuid,reply text,next_status text) returns void language plpgsql security definer set search_path=public as $$ begin
+ if not is_admin() then raise exception 'Administrator permission required'; end if;
+ if reply is null or length(trim(reply)) not between 3 and 2000 or next_status is null or next_status not in ('processing','answered') then raise exception 'Add a response and valid status'; end if;
+ update account_requests set response=trim(reply),status=next_status where id=request_id;
+ if not found then raise exception 'Request not found'; end if;
+ insert into notifications(user_id,message) select user_id,'Your account request has an update. Open Profile and support.' from account_requests where id=request_id;
+ insert into audit_log(actor_id,entity_id,action,reason) values(auth.uid(),request_id,'account.request',trim(reply));
+end $$;
+
+create function revise_submission(entry uuid,new_title text,new_description text) returns void language plpgsql security definer set search_path=public as $$ begin
+ if not is_active() then raise exception 'Sign in with an active account'; end if;
+ if new_title is null or length(trim(new_title)) not between 4 and 200 or new_description is null or length(trim(new_description)) not between 20 and 12000 then raise exception 'Add a title and meaningful description'; end if;
+ update entries set title=trim(new_title),description=trim(new_description),status='pending' where id=entry and owner_id=auth.uid() and status in ('pending','changes_requested','rejected');
+ if not found then raise exception 'Only your pending, rejected or returned submissions can be revised'; end if;
+ insert into audit_log(actor_id,entity_id,action,reason) values(auth.uid(),entry,'entry.resubmitted','Author revised submission');
+end $$;
+
+-- Structured learning content is editable by staff and remains unpublished until activated.
+create policy languages_manage on languages for all to authenticated using(is_admin()) with check(is_admin());
+create policy lessons_manage on lessons for all to authenticated using(is_admin()) with check(is_admin());
+grant select,insert,update,delete on languages,lessons to authenticated;
+grant select,insert,update,delete on learning_progress to authenticated;
+
+alter table store_products add column plan_id uuid references plans on delete cascade;
+create function save_plan_product(plan uuid,product text,entitlement text,reason text) returns void language plpgsql security definer set search_path=public as $$ begin
+ if not is_admin() then raise exception 'Administrator permission required'; end if;
+ if plan is null or not exists(select 1 from plans where id=plan) or product is null or length(trim(product))<1 or entitlement is null or length(trim(entitlement))<1 or reason is null or length(trim(reason))<3 then raise exception 'Provide a plan, product, entitlement and reason'; end if;
+ insert into store_products(product_id,entitlement_id,plan_id) values(trim(product),trim(entitlement),plan)
+ on conflict(product_id) do update set entitlement_id=excluded.entitlement_id,plan_id=excluded.plan_id,classroom_id=null,active=true;
+ insert into audit_log(actor_id,entity_id,action,reason) values(auth.uid(),plan,'plan.product',trim(reason));
+end $$;
+create function my_plan_access() returns table(plan_id uuid,expires_at timestamptz) language sql stable security definer set search_path=public as $$ select p.plan_id,a.expires_at from purchase_access a join store_products p using(product_id) join plans pl on pl.id=p.plan_id where a.user_id=auth.uid() and is_active() and p.active and pl.active and (a.expires_at is null or a.expires_at>now()) $$;
+create function has_feature_access(feature text) returns boolean language sql stable security definer set search_path=public as $$
+ select is_admin() or not exists(select 1 from feature_rules where feature_key=feature) or exists(select 1 from feature_rules r where r.feature_key=feature and (r.access_mode='free' or r.free_until>now() or (is_active() and exists(select 1 from my_plan_access() a where a.plan_id=r.plan_id))))
+$$;
+create function save_feature_access(feature text,mode text,plan uuid,free_through timestamptz,reason text) returns void language plpgsql security definer set search_path=public as $$ begin
+ if not is_admin() then raise exception 'Administrator permission required'; end if;
+ if feature is null or feature not in ('library_downloads','video_lessons','language_courses') or mode is null or mode not in ('free','individual','premier','subscription') or reason is null or length(trim(reason))<3 then raise exception 'Choose a supported feature, access mode and reason'; end if;
+ if mode<>'free' and (plan is null or not exists(select 1 from plans where id=plan and active)) then raise exception 'Choose an active plan for paid access'; end if;
+ insert into feature_rules(feature_key,access_mode,plan_id,free_until) values(feature,mode,plan,free_through) on conflict(feature_key) do update set access_mode=excluded.access_mode,plan_id=excluded.plan_id,free_until=excluded.free_until;
+ insert into audit_log(actor_id,action,reason) values(auth.uid(),'feature.access',trim(reason));
+end $$;
+drop policy lessons_read on lessons;
+create policy lessons_read on lessons for select using(is_admin() or (active and has_feature_access('language_courses')));
+drop policy read_submitted on storage.objects;
+create policy read_submitted on storage.objects for select to authenticated using(bucket_id='submissions' and is_active() and ((storage.foldername(name))[1]=auth.uid()::text or is_admin() or exists(select 1 from entries e where e.file_path=name and e.status='approved' and e.kind in ('book','course','reel') and has_feature_access(case when e.kind='reel' then 'video_lessons' else 'library_downloads' end))));
+revoke all on function save_feature_access(text,text,uuid,timestamptz,text) from public,anon;
+grant execute on function save_feature_access(text,text,uuid,timestamptz,text) to authenticated;
+revoke all on function has_feature_access(text) from public;
+grant execute on function has_feature_access(text) to anon,authenticated;
+
+create table funding_messages(id uuid primary key default gen_random_uuid(),agreement_id uuid not null references funding_agreements on delete cascade,author_id uuid not null references profiles,body text not null check(length(trim(body)) between 3 and 4000),created_at timestamptz not null default now());
+alter table funding_messages enable row level security;
+create policy funding_message_read on funding_messages for select to authenticated using(is_active() and exists(select 1 from funding_agreements where id=agreement_id and (student_id=auth.uid() or is_admin())));
+create policy funding_message_add on funding_messages for insert to authenticated with check(author_id=auth.uid() and is_active() and exists(select 1 from funding_agreements where id=agreement_id and stage not in ('completed','suspended') and (student_id=auth.uid() or is_admin())));
+grant select,insert on funding_messages to authenticated;
+grant select on funding_agreements,transactions,earnings to authenticated;
+create function manage_funding(entry uuid,new_stage text,amount bigint,unit_currency text,terms text,reason text) returns uuid language plpgsql security definer set search_path=public as $$ declare agreement uuid; student uuid; begin
+ if not is_admin() then raise exception 'Administrator permission required'; end if;
+ if new_stage is null or new_stage not in ('review','negotiation','agreement','progress','completed','suspended') or amount is null or amount<=0 or unit_currency is null or unit_currency !~ '^[A-Z]{3}$' or terms is null or length(trim(terms))<3 or reason is null or length(trim(reason))<3 then raise exception 'Add valid terms, amount, currency and reason'; end if;
+ select owner_id into student from entries where id=entry and kind in ('assistance','idea') and status='approved';
+ if student is null then raise exception 'Approve the assistance or idea submission first'; end if;
+ perform pg_advisory_xact_lock(hashtextextended(entry::text,6));
+ select id into agreement from funding_agreements where entry_id=entry order by created_at limit 1;
+ if agreement is null then insert into funding_agreements(entry_id,student_id,stage,amount_minor,currency,conditions,approved_by) values(entry,student,new_stage,amount,unit_currency,terms,auth.uid()) returning id into agreement;
+ else update funding_agreements set stage=new_stage,amount_minor=amount,currency=unit_currency,conditions=terms,approved_by=auth.uid() where id=agreement; end if;
+ insert into audit_log(actor_id,entity_id,action,reason) values(auth.uid(),agreement,'funding.'||new_stage,trim(reason));
+ insert into notifications(user_id,message) values(student,'Your funding case was updated. Open Support to review the terms.');
+ return agreement;
+end $$;
+
+revoke all on function update_my_profile(text,text,text,text,text,boolean),follow_educator(uuid,boolean),set_educator_role(uuid,user_role,text),respond_account_request(uuid,text,text),revise_submission(uuid,text,text),save_plan_product(uuid,text,text,text),my_plan_access(),manage_funding(uuid,text,bigint,text,text,text) from public,anon;
+grant execute on function update_my_profile(text,text,text,text,text,boolean),follow_educator(uuid,boolean),set_educator_role(uuid,user_role,text),respond_account_request(uuid,text,text),revise_submission(uuid,text,text),save_plan_product(uuid,text,text,text),my_plan_access(),manage_funding(uuid,text,bigint,text,text,text) to authenticated;
+revoke all on function educator_directory() from public;
+grant execute on function educator_directory() to anon,authenticated;
+
+
+-- 007_service_integrity.sql
+-- Verified staff roles determine earnings; store products have one access target.
+create or replace function begin_content_usage(content_id uuid) returns uuid language plpgsql security definer set search_path=public as $$ declare item entries; policy earnings_policies; usage_id uuid; begin
+ if not is_active() then return null; end if;
+ select * into item from entries where id=content_id and status='approved' and kind in ('book','course','reel');
+ if not found or item.owner_id=auth.uid() then return null; end if;
+ if (select count(*) from content_usage where viewer_id=auth.uid() and day=current_date)>=100 then return null; end if;
+ select ep.* into policy from earnings_policies ep join profiles p on p.id=item.owner_id where ep.active and ep.role=p.role order by ep.id limit 1;
+ insert into content_usage(entry_id,viewer_id,policy_id,rate,currency) values(content_id,auth.uid(),policy.id,coalesce(policy.view_rate,0),coalesce(policy.currency,'USD')) on conflict(entry_id,viewer_id,day) do nothing returning id into usage_id;
+ if usage_id is null then update content_usage set last_seen=now() where entry_id=content_id and viewer_id=auth.uid() and day=current_date returning id into usage_id; end if;
+ return usage_id;
+end $$;
+create or replace function request_creator_payout(payout_currency text) returns uuid language plpgsql security definer set search_path=public as $$ declare available bigint; threshold bigint; result uuid; begin
+ if not is_active() then raise exception 'Sign in with an active account'; end if;
+ if payout_currency not in ('USD','EUR','GBP','ZAR') then raise exception 'Payout currency is not supported'; end if;
+ perform pg_advisory_xact_lock(hashtextextended(auth.uid()::text,2));
+ select floor(coalesce(sum(amount),0)*100)::bigint into available from creator_ledger where user_id=auth.uid() and currency=payout_currency;
+ available:=available-coalesce((select sum(amount_minor) from payout_requests where user_id=auth.uid() and currency=payout_currency and status in ('requested','processing','transferred')),0);
+ select ep.minimum_payout_minor into threshold from earnings_policies ep join profiles p on p.id=auth.uid() where ep.active and ep.currency=payout_currency and ep.role=p.role order by ep.id limit 1;
+ if available<greatest(coalesce(threshold,1000),1) then raise exception 'Available balance is below the payout minimum'; end if;
+ if not exists(select 1 from payout_accounts where user_id=auth.uid()) then raise exception 'Complete payout account setup first'; end if;
+ insert into payout_requests(user_id,amount_minor,currency) values(auth.uid(),available,payout_currency) returning id into result;
+ return result;
+end $$;
+create or replace function save_store_product(product text,entitlement text,room uuid,reason text) returns void language plpgsql security definer set search_path=public as $$ begin
+ if not is_admin() then raise exception 'Administrator permission required'; end if;
+ if length(trim(reason))<5 or length(trim(product))<3 or length(trim(entitlement))<3 then raise exception 'Product, entitlement and review reason required'; end if;
+ if room is null and entitlement<>'remove_ads' then raise exception 'Non-classroom products must use remove_ads entitlement'; end if;
+ insert into store_products(product_id,entitlement_id,classroom_id) values(product,entitlement,room) on conflict(product_id) do update set entitlement_id=excluded.entitlement_id,classroom_id=excluded.classroom_id,plan_id=null;
+ insert into audit_log(actor_id,action,reason,details) values(auth.uid(),'store.product',reason,jsonb_build_object('product',product,'classroom',room));
+end $$;
+alter table store_products add constraint store_product_single_target check (classroom_id is null or plan_id is null);
+create policy remove_orphan_upload on storage.objects for delete to authenticated using(bucket_id='submissions' and (storage.foldername(name))[1]=auth.uid()::text and not exists(select 1 from public.entries e where e.file_path=name));
+
+
+-- 008_identity_community.sql
+-- International identities, reviewed staff applications and private communication.
+create table education_systems(code text primary key,name text not null unique);
+create table education_levels(system_code text references education_systems, label text, ordinal integer not null check(ordinal between 1 and 20),primary key(system_code,label));
+insert into education_systems values('ZW','Zimbabwe'),('GB','United Kingdom'),('ZA','South Africa'),('US','United States'),('NG','Nigeria'),('KE','Kenya'),('OTHER','Other / international');
+insert into education_levels select 'ZW',case when n<=7 then 'Grade '||n else 'Form '||(n-7) end,n from generate_series(1,13)n;
+insert into education_levels values('ZW','Lower 6',12),('ZW','Upper 6',13);
+insert into education_levels select 'GB','Year '||n,n from generate_series(1,13)n;
+insert into education_levels select c,'Grade '||n,n from unnest(array['ZA','US','KE'])c cross join generate_series(1,12)n;
+insert into education_levels select 'NG',case when n<=6 then 'Primary '||n when n<=9 then 'JSS '||(n-6) else 'SSS '||(n-9) end,n from generate_series(1,12)n;
+insert into education_levels select 'OTHER','Level '||n,n from generate_series(1,20)n;
+alter table education_systems enable row level security; alter table education_levels enable row level security;
+create policy systems_read on education_systems for select using(true);
+create policy levels_read on education_levels for select using(true);
+create policy systems_admin on education_systems for all to authenticated using(is_admin()) with check(is_admin());
+create policy levels_admin on education_levels for all to authenticated using(is_admin()) with check(is_admin());
+grant select on education_systems,education_levels to anon,authenticated;
+grant insert,update,delete on education_systems,education_levels to authenticated;
+alter table profiles add column username text, add column avatar_path text, add column education_system text references education_systems, add column education_level text, add column education_ordinal integer, add column safe_responder boolean not null default false;
+update profiles set username='learner_'||replace(id::text,'-',''),education_ordinal=case when grade like 'Grade %' then substring(grade from 7)::int when grade like 'Form %' then 7+substring(grade from 6)::int end;
+alter table profiles alter column username set not null;
+alter table profiles add constraint username_format check(username ~ '^[a-z0-9_]{3,40}$');
+create unique index profiles_username_unique on profiles(lower(username));
+create function canonical_grade(n integer) returns text language sql immutable as $$ select case when n between 1 and 7 then 'Grade '||n when n between 8 and 13 then 'Form '||(n-7) end $$;
+create function profile_identity_defaults() returns trigger language plpgsql set search_path=public as $$ begin
+ if new.username is null then new.username:='learner_'||replace(new.id::text,'-',''); end if;
+ return new;
+end $$;
+create trigger profile_identity_defaults before insert on profiles for each row execute function profile_identity_defaults();
+create or replace function create_profile() returns trigger language plpgsql security definer set search_path=public as $$ declare chosen text; ordinal integer; sys text; level_label text; begin
+ chosen:=lower(trim(new.raw_user_meta_data->>'username'));
+ if chosen is null or chosen='' then chosen:='learner_'||replace(new.id::text,'-',''); end if;
+ sys:=new.raw_user_meta_data->>'education_system';level_label:=new.raw_user_meta_data->>'education_level';
+ select l.ordinal into ordinal from education_levels l where l.system_code=sys and l.label=level_label;
+ if ordinal is null then select case when new.raw_user_meta_data->>'grade' like 'Grade _' then substring(new.raw_user_meta_data->>'grade' from 7)::int when new.raw_user_meta_data->>'grade' like 'Form _' then 7+substring(new.raw_user_meta_data->>'grade' from 6)::int end into ordinal; sys:=null;level_label:=null; end if;
+ insert into profiles(id,username,grade,education_system,education_level,education_ordinal,first_name,surname,date_of_birth,country,account_type,display_name)
+ values(new.id,chosen,canonical_grade(ordinal),sys,level_label,ordinal,coalesce(new.raw_user_meta_data->>'first_name',''),coalesce(new.raw_user_meta_data->>'surname',''),nullif(new.raw_user_meta_data->>'date_of_birth','')::date,coalesce(new.raw_user_meta_data->>'country',''),case when new.raw_user_meta_data->>'account_type'='teacher' then 'teacher' else 'student' end,coalesce(new.raw_user_meta_data->>'first_name','Learner'));
+ return new;
+end $$;
+create function set_my_education(system text,level_label text) returns void language plpgsql security definer set search_path=public as $$ declare n integer; country_name text; begin
+ if not is_active() then raise exception 'Active account required'; end if;
+ select l.ordinal,s.name into n,country_name from education_levels l join education_systems s on s.code=l.system_code where l.system_code=system and l.label=level_label;
+ if n is null then raise exception 'Choose a supported country and education level'; end if;
+ update profiles set country=country_name,education_system=system,education_level=level_label,education_ordinal=n,grade=canonical_grade(n) where id=auth.uid();
+end $$;
+create or replace function set_my_grade(new_grade text) returns void language plpgsql security definer set search_path=public as $$ declare n integer; begin
+ if not is_active() then raise exception 'Active account required'; end if;
+ select ordinal into n from education_levels where system_code='ZW' and label=new_grade;
+ if n is null then raise exception 'Choose your education level'; end if;
+ update profiles set grade=new_grade,education_ordinal=n where id=auth.uid();
+end $$;
+create function set_my_identity(handle text,photo text) returns void language plpgsql security definer set search_path=public as $$ begin
+ if not is_active() then raise exception 'Active account required'; end if;
+ if handle is null or lower(trim(handle)) !~ '^[a-z0-9_]{3,40}$' then raise exception 'Use 3-40 letters, numbers or underscores for your username'; end if;
+ if photo is not null and photo not like auth.uid()::text||'/%' then raise exception 'Use your own profile picture'; end if;
+ update profiles set username=lower(trim(handle)),avatar_path=photo where id=auth.uid();
+end $$;
+create function find_people(term text default '') returns table(id uuid,username text,display_name text,avatar_path text,bio text,role user_role) language sql stable security definer set search_path=public as $$
+ select p.id,p.username,p.display_name,p.avatar_path,p.bio,p.role from profiles p where is_active() and not p.suspended and (term='' or p.username ilike '%'||left(term,40)||'%' or p.display_name ilike '%'||left(term,40)||'%') order by p.username limit 50
+$$;
+create function public_people(ids uuid[]) returns table(id uuid,username text,display_name text,avatar_path text) language sql stable security definer set search_path=public as $$ select p.id,p.username,p.display_name,p.avatar_path from profiles p where is_active() and not p.suspended and p.id=any(ids[1:100]) $$;
+insert into storage.buckets(id,name,public,file_size_limit,allowed_mime_types) values('avatars','avatars',false,5242880,array['image/jpeg','image/png','image/webp']),('verification','verification',false,52428800,array['image/jpeg','image/png','application/pdf','video/mp4','video/quicktime']);
+create policy avatar_upload on storage.objects for insert to authenticated with check(bucket_id='avatars' and is_active() and (storage.foldername(name))[1]=auth.uid()::text);
+create policy avatar_read on storage.objects for select to authenticated using(bucket_id='avatars' and is_active() and ((storage.foldername(name))[1]=auth.uid()::text or exists(select 1 from profiles where avatar_path=name and not suspended)));
+-- SECURITY DEFINER avoids exposing full profile rows to avatar readers.
+create function visible_avatar(path text) returns boolean language sql stable security definer set search_path=public as $$ select exists(select 1 from profiles where avatar_path=path and not suspended) $$;
+drop policy avatar_read on storage.objects;
+create policy avatar_read on storage.objects for select to authenticated using(bucket_id='avatars' and is_active() and ((storage.foldername(name))[1]=auth.uid()::text or visible_avatar(name)));
+create policy proof_upload on storage.objects for insert to authenticated with check(bucket_id='verification' and is_active() and (storage.foldername(name))[1]=auth.uid()::text);
+create policy proof_read on storage.objects for select to authenticated using(bucket_id='verification' and is_active() and ((storage.foldername(name))[1]=auth.uid()::text or is_admin()));
+create table staff_applications(id uuid primary key default gen_random_uuid(),user_id uuid not null references profiles on delete cascade,kind text not null check(kind in ('teacher','safe_responder')),subject text not null,statement text not null check(length(trim(statement)) between 20 and 4000),id_path text,video_path text not null,status text not null default 'pending' check(status in ('pending','approved','rejected')),reason text not null default '',reviewed_by uuid references profiles,created_at timestamptz not null default now(),check(kind<>'teacher' or id_path is not null));
+create unique index staff_pending on staff_applications(user_id,kind) where status='pending';
+alter table staff_applications enable row level security;
+create policy staff_read on staff_applications for select to authenticated using(is_active() and (user_id=auth.uid() or is_admin()));
+create policy staff_apply on staff_applications for insert to authenticated with check(is_active() and user_id=auth.uid() and status='pending' and reason='' and reviewed_by is null and video_path like auth.uid()::text||'/%' and (id_path is null or id_path like auth.uid()::text||'/%'));
+grant select,insert on staff_applications to authenticated;
+create function review_staff(application uuid,approve boolean,reason text) returns void language plpgsql security definer set search_path=public as $$ declare a staff_applications; begin
+ if not is_admin() then raise exception 'Administrator permission required'; end if;
+ if approve is null or reason is null or length(trim(reason))<5 then raise exception 'Explain the verification decision'; end if;
+ select * into a from staff_applications where id=application and status='pending' for update;
+ if not found then raise exception 'Pending application not found'; end if;
+ if a.user_id=auth.uid() then raise exception 'Another administrator must review your application'; end if;
+ update staff_applications set status=case when approve then 'approved' else 'rejected' end,reason=trim(review_staff.reason),reviewed_by=auth.uid() where id=a.id;
+ if approve and a.kind='teacher' then update profiles set role='teacher',account_type='teacher' where id=a.user_id and role not in ('admin','owner'); end if;
+ if approve and a.kind='safe_responder' then update profiles set safe_responder=true where id=a.user_id; end if;
+ insert into notifications(user_id,message) values(a.user_id,'Your verification application has been reviewed. Open Settings.');
+ insert into audit_log(actor_id,entity_id,action,reason) values(auth.uid(),a.id,'verification.'||case when approve then 'approved' else 'rejected' end,trim(review_staff.reason));
+end $$;
+create function can_teach() returns boolean language sql stable security definer set search_path=public as $$ select is_admin() or exists(select 1 from profiles where id=auth.uid() and role='teacher' and not suspended) $$;
+drop policy rooms_create on classrooms;
+create policy rooms_create on classrooms for insert to authenticated with check(owner_id=auth.uid() and can_teach());
+create function classroom_roster(room uuid) returns table(user_id uuid,username text,display_name text) language plpgsql stable security definer set search_path=public as $$ begin
+ if not is_active() or not(is_admin() or exists(select 1 from classrooms where id=room and owner_id=auth.uid())) then raise exception 'Classroom owner permission required'; end if;
+ return query select p.id,p.username,p.display_name from classroom_members m join profiles p on p.id=m.user_id where m.classroom_id=room order by p.username;
+end $$;
+create function can_reply_support() returns boolean language sql stable security definer set search_path=public as $$ select is_admin() or exists(select 1 from profiles where id=auth.uid() and safe_responder and not suspended) $$;
+drop policy support_read on support_requests;
+create policy support_read on support_requests for select to authenticated using(is_active() and (user_id=auth.uid() or can_reply_support()));
+create or replace function respond_to_support(request_id uuid,reply text,new_status text) returns void language plpgsql security definer set search_path=public as $$ begin
+ if not can_reply_support() then raise exception 'Approved Safe Room responder permission required'; end if;
+ if reply is null or length(trim(reply)) not between 1 and 4000 or new_status not in ('answered','closed') then raise exception 'Add a response and valid status'; end if;
+ update support_requests set response=trim(reply),status=new_status where id=request_id;
+ if not found then raise exception 'Request not found'; end if;
+ insert into audit_log(actor_id,entity_id,action,reason) values(auth.uid(),request_id,'support.'||new_status,'Private support response recorded');
+end $$;
+create or replace function publish_talent() returns trigger language plpgsql security definer set search_path=public as $$ begin
+ if auth.uid() is not null then select coalesce(nullif(display_name,''),username) into new.author from profiles where id=auth.uid(); end if;
+ if (new.kind='reel' and new.video_format='talent') or can_teach() then new.status:='approved'; end if;
+ return new;
+end $$;
+drop policy entries_submit on entries;
+create policy entries_submit on entries for insert to authenticated with check(owner_id=auth.uid() and is_active() and (status='pending' or (status='approved' and (can_teach() or (kind='reel' and video_format='talent')))) and target=0 and raised=0 and (file_path is null or file_path like auth.uid()::text||'/%'));
+create table user_blocks(user_id uuid references profiles on delete cascade,blocked_id uuid references profiles on delete cascade,primary key(user_id,blocked_id),check(user_id<>blocked_id));
+alter table user_blocks enable row level security;
+create policy blocks_own on user_blocks for all to authenticated using(user_id=auth.uid()) with check(user_id=auth.uid() and is_active());
+grant select,insert,delete on user_blocks to authenticated;
+create function can_message(other uuid) returns boolean language sql stable security definer set search_path=public as $$ select is_active() and other<>auth.uid() and exists(select 1 from profiles where id=other and not suspended) and not exists(select 1 from user_blocks where (user_id=auth.uid() and blocked_id=other) or (user_id=other and blocked_id=auth.uid())) $$;
+create table direct_messages(id uuid primary key default gen_random_uuid(),sender_id uuid not null references profiles on delete cascade,recipient_id uuid not null references profiles on delete cascade,body text not null check(length(trim(body)) between 1 and 2000),created_at timestamptz not null default now(),read_at timestamptz);
+create index dm_inbox on direct_messages(recipient_id,created_at desc); create index dm_sent on direct_messages(sender_id,created_at desc);
+alter table direct_messages enable row level security;
+create policy dm_read on direct_messages for select to authenticated using(is_active() and auth.uid() in (sender_id,recipient_id));
+create policy dm_send on direct_messages for insert to authenticated with check(sender_id=auth.uid() and can_message(recipient_id) and read_at is null);
+create policy dm_mark on direct_messages for update to authenticated using(is_active() and recipient_id=auth.uid()) with check(recipient_id=auth.uid());
+grant select,insert on direct_messages to authenticated; grant update(read_at) on direct_messages to authenticated;
+create table language_messages(id uuid primary key default gen_random_uuid(),language_id uuid not null references languages on delete cascade,user_id uuid not null references profiles on delete cascade,body text not null check(length(trim(body)) between 1 and 2000),created_at timestamptz not null default now());
+create index language_board_time on language_messages(language_id,created_at desc);
+alter table language_messages enable row level security;
+create policy language_chat_read on language_messages for select to authenticated using(is_active());
+create policy language_chat_add on language_messages for insert to authenticated with check(is_active() and user_id=auth.uid());
+create policy language_chat_remove on language_messages for delete to authenticated using(user_id=auth.uid() or can_moderate());
+grant select,insert,delete on language_messages to authenticated;
+create function message_limits() returns trigger language plpgsql security definer set search_path=public as $$ declare count_recent integer; begin
+ perform pg_advisory_xact_lock(hashtextextended(auth.uid()::text,8));
+ if tg_table_name='direct_messages' then select count(*) into count_recent from direct_messages where sender_id=auth.uid() and created_at>now()-interval '1 minute';
+ else select count(*) into count_recent from language_messages where user_id=auth.uid() and created_at>now()-interval '1 minute'; end if;
+ if count_recent>=20 then raise exception 'Please wait before sending more messages'; end if;
+ new.created_at:=clock_timestamp(); return new;
+end $$;
+create trigger dm_limits before insert on direct_messages for each row execute function message_limits();
+create trigger board_limits before insert on language_messages for each row execute function message_limits();
+create table chat_reports(id uuid primary key default gen_random_uuid(),reporter_id uuid not null references profiles on delete cascade,direct_message uuid references direct_messages on delete cascade,language_message uuid references language_messages on delete cascade,reason text not null check(length(trim(reason)) between 5 and 1000),resolved boolean not null default false,created_at timestamptz default now(),check(num_nonnulls(direct_message,language_message)=1));
+alter table chat_reports enable row level security;
+create policy chat_report_add on chat_reports for insert to authenticated with check(is_active() and reporter_id=auth.uid() and not resolved and ((direct_message is not null and exists(select 1 from direct_messages where id=direct_message)) or (language_message is not null and exists(select 1 from language_messages where id=language_message))));
+create policy chat_report_read on chat_reports for select to authenticated using(reporter_id=auth.uid() or can_moderate());
+create policy chat_report_resolve on chat_reports for update to authenticated using(can_moderate()) with check(can_moderate());
+grant select,insert on chat_reports to authenticated; grant update(resolved) on chat_reports to authenticated;
+create function reported_messages() returns table(report_id uuid,reason text,body text,sender_id uuid,resolved boolean) language sql stable security definer set search_path=public as $$ select r.id,r.reason,coalesce(d.body,l.body),coalesce(d.sender_id,l.user_id),r.resolved from chat_reports r left join direct_messages d on d.id=r.direct_message left join language_messages l on l.id=r.language_message where can_moderate() order by r.created_at desc limit 100 $$;
+revoke all on function canonical_grade(integer),set_my_education(text,text),set_my_identity(text,text),find_people(text),public_people(uuid[]),visible_avatar(text),review_staff(uuid,boolean,text),can_teach(),classroom_roster(uuid),can_reply_support(),can_message(uuid),reported_messages() from public,anon;
+grant execute on function set_my_education(text,text),set_my_identity(text,text),find_people(text),public_people(uuid[]),visible_avatar(text),review_staff(uuid,boolean,text),can_teach(),classroom_roster(uuid),can_reply_support(),can_message(uuid),reported_messages() to authenticated;
+grant execute on function canonical_grade(integer) to authenticated;
+-- Override hosted default grants: recipients can only mark a message read.
+revoke all on direct_messages,chat_reports from anon,authenticated;
+grant select,insert on direct_messages,chat_reports to authenticated;
+grant update(read_at) on direct_messages to authenticated;
+grant update(resolved) on chat_reports to authenticated;
+create or replace function set_educator_role(target_user uuid,new_role user_role,reason text) returns void language plpgsql security definer set search_path=public as $$ begin
+ if not is_admin() then raise exception 'Administrator permission required'; end if;
+ if new_role is null or new_role not in ('student','teacher','tutor','creator') or reason is null or length(trim(reason))<3 then raise exception 'Choose an educator role and add a reason'; end if;
+ if new_role='teacher' and not exists(select 1 from staff_applications where user_id=target_user and kind='teacher' and status='approved') then raise exception 'Review and approve the teacher ID and teaching video first'; end if;
+ update profiles set role=new_role where id=target_user and role not in ('owner','admin');
+ if not found then raise exception 'This account cannot be changed here'; end if;
+ insert into audit_log(actor_id,entity_id,action,reason) values(auth.uid(),target_user,'educator.role',trim(reason));
+end $$;
+create function notify_direct_message() returns trigger language plpgsql security definer set search_path=public as $$ begin
+ insert into notifications(user_id,message) values(new.recipient_id,'You have a new direct message. Open Direct messages.');return new;
+end $$;
+create trigger dm_notify after insert on direct_messages for each row execute function notify_direct_message();
+
+
+-- 009_timed_quiz.sql
+-- Ten-question quizzes. Question contents, timing, deductions and rewards are server-owned.
+create table quiz_groups(id uuid primary key default gen_random_uuid(),name text not null,levels integer[] not null check(cardinality(levels)=3),active boolean not null default true);
+create function quiz_group_overlap() returns trigger language plpgsql security definer set search_path=public as $$ begin
+ perform pg_advisory_xact_lock(984113);
+ if (select count(distinct x) from unnest(new.levels)x)<>3 or exists(select 1 from unnest(new.levels)x where x not between 1 and 24) then raise exception 'Choose three distinct education levels'; end if;
+ if new.active and exists(select 1 from quiz_groups where id<>new.id and active and levels && new.levels) then raise exception 'An education level already belongs to another active group'; end if;
+ return new;
+end $$;
+create trigger quiz_groups_validate before insert or update on quiz_groups for each row execute function quiz_group_overlap();
+insert into quiz_groups(name,levels) select 'Levels '||n||'-'||(n+2),array[n,n+1,n+2] from generate_series(1,19,3)n;
+create table quiz_bank(id uuid primary key default gen_random_uuid(),group_id uuid not null references quiz_groups,category text not null check(category in ('speed','hard')),subject text not null,prompt text not null check(length(trim(prompt)) between 3 and 2000),choices jsonb not null check(jsonb_typeof(choices)='array' and jsonb_array_length(choices) between 2 and 6),correct integer not null,points integer not null default 10 check(points between 1 and 100),explanation text not null default '',active boolean not null default true,check(correct>=0 and correct<jsonb_array_length(choices)));
+alter table quiz_groups enable row level security;alter table quiz_bank enable row level security;
+create policy quiz_groups_read on quiz_groups for select using(true);
+create policy quiz_groups_admin on quiz_groups for all to authenticated using(is_admin()) with check(is_admin());
+create policy quiz_bank_admin on quiz_bank for all to authenticated using(is_admin()) with check(is_admin());
+grant select on quiz_groups to anon,authenticated;
+grant insert,update,delete on quiz_groups to authenticated;
+grant select,insert,update,delete on quiz_bank to authenticated;
+-- Original arithmetic starter pools, varied by group. Staff can replace and expand them.
+insert into quiz_bank(group_id,category,subject,prompt,choices,correct,explanation)
+select g.id,c,'Maths',case when c='speed' then 'What is '||n||' + '||g.levels[1]||'?' else 'What is '||n||' × '||(g.levels[1]+2)||' - 3?' end,
+ case n%4 when 0 then jsonb_build_array(answer,answer+1,answer-1,answer+3) when 1 then jsonb_build_array(answer+1,answer,answer-1,answer+3) when 2 then jsonb_build_array(answer+1,answer-1,answer,answer+3) else jsonb_build_array(answer+1,answer-1,answer+3,answer) end,n%4,'The answer is '||answer||'.'
+from quiz_groups g cross join unnest(array['speed','hard'])c cross join generate_series(1,40)n
+cross join lateral (select case when c='speed' then n+g.levels[1] else n*(g.levels[1]+2)-3 end answer)r;
+create table quiz_sets(id uuid primary key default gen_random_uuid(),user_id uuid not null references profiles on delete cascade,group_id uuid not null references quiz_groups,category text not null check(category in ('speed','hard')),month date not null default (date_trunc('month',now() at time zone 'UTC'))::date,snapshot jsonb not null,answers jsonb not null default '[]',cursor integer not null default 0,score integer not null default 0,correct_count integer not null default 0,status text not null default 'playing' check(status in ('playing','completed','expired')),started_at timestamptz not null default clock_timestamp(),issued_at timestamptz,finished_at timestamptz,elapsed_ms bigint);
+create unique index quiz_one_active on quiz_sets(user_id,category) where status='playing';
+alter table quiz_sets enable row level security;
+create policy quiz_sets_read on quiz_sets for select to authenticated using(user_id=auth.uid() and is_active());
+revoke all on quiz_sets from anon,authenticated;
+grant select(id,user_id,group_id,category,month,cursor,score,correct_count,status,started_at,finished_at,elapsed_ms) on quiz_sets to authenticated;
+create function start_quiz(kind text) returns uuid language plpgsql security definer set search_path=public as $$ declare result uuid; group_key uuid; pool jsonb; begin
+ if not is_active() then raise exception 'Sign in to play'; end if;
+ if kind is null or kind not in ('speed','hard') then raise exception 'Choose a quiz category'; end if;
+ perform pg_advisory_xact_lock(hashtextextended(auth.uid()::text,9));
+ update quiz_sets set status='expired' where user_id=auth.uid() and status='playing' and month<>(date_trunc('month',now() at time zone 'UTC'))::date;
+ select id into result from quiz_sets where user_id=auth.uid() and category=kind and status='playing';
+ if result is not null then return result; end if;
+ select g.id into group_key from quiz_groups g join profiles p on p.education_ordinal=any(g.levels) where p.id=auth.uid() and g.active;
+ if group_key is null then raise exception 'Choose your country and education level in Settings. A quiz group must be configured for that level.'; end if;
+ select jsonb_agg(to_jsonb(q)) into pool from (select b.* from quiz_bank b where b.active and b.group_id=group_key and b.category=kind and (kind='speed' or not exists(select 1 from quiz_sets s cross join lateral jsonb_array_elements(s.snapshot)x where s.user_id=auth.uid() and s.category='hard' and s.month=(date_trunc('month',now() at time zone 'UTC'))::date and x->>'id'=b.id::text)) order by random() limit 10)q;
+ if pool is null or jsonb_array_length(pool)<10 then raise exception 'At least 10 unseen questions are needed for this group. Ask an administrator to add more questions.'; end if;
+ insert into quiz_sets(user_id,group_id,category,snapshot) values(auth.uid(),group_key,kind,pool) returning id into result;
+ return result;
+end $$;
+create function quiz_next(set_id uuid) returns jsonb language plpgsql security definer set search_path=public as $$ declare s quiz_sets; q jsonb; begin
+ if not is_active() then raise exception 'Active account required'; end if;
+ select * into s from quiz_sets where id=set_id and user_id=auth.uid() for update;
+ if not found then raise exception 'Quiz set not found'; end if;
+ if s.status<>'playing' then return jsonb_build_object('status',s.status,'score',s.score,'correct_count',s.correct_count,'elapsed_ms',s.elapsed_ms); end if;
+ if s.issued_at is null then update quiz_sets set issued_at=clock_timestamp() where id=s.id returning * into s; end if;
+ q:=s.snapshot->s.cursor;
+ return jsonb_build_object('status','playing','position',s.cursor,'score',s.score,'prompt',q->>'prompt','choices',q->'choices','deadline',s.issued_at+interval '30 seconds','server_time',clock_timestamp());
+end $$;
+create function submit_quiz_answer(set_id uuid,question_index integer,choice integer) returns jsonb language plpgsql security definer set search_path=public as $$ declare s quiz_sets; q jsonb; correct boolean; points integer; result jsonb; elapsed bigint; begin
+ if not is_active() then raise exception 'Active account required'; end if;
+ select * into s from quiz_sets where id=set_id and user_id=auth.uid() for update;
+ if not found or question_index is null or question_index<0 or question_index>9 then raise exception 'Invalid quiz request'; end if;
+ if question_index<s.cursor then return s.answers->question_index; end if;
+ if s.status<>'playing' or question_index<>s.cursor or s.issued_at is null then raise exception 'Load the current question first'; end if;
+ if s.month<>(date_trunc('month',now() at time zone 'UTC'))::date then raise exception 'The quiz month has ended. Start a new set.'; end if;
+ q:=s.snapshot->question_index;
+ if choice is not null and (choice<0 or choice>=jsonb_array_length(q->'choices')) then raise exception 'Invalid answer option'; end if;
+ correct:=choice is not null and choice=(q->>'correct')::int and clock_timestamp()<s.issued_at+interval '30 seconds';
+ points:=case when correct then (q->>'points')::int else -3 end;
+ elapsed:=greatest(0,floor(extract(epoch from clock_timestamp()-s.started_at)*1000)::bigint);
+ result:=jsonb_build_object('correct',correct,'correct_choice',(q->>'correct')::int,'selected',choice,'points',points,'explanation',q->>'explanation','score',s.score+points,'completed',question_index=9,'elapsed_ms',elapsed);
+ update quiz_sets set answers=answers||jsonb_build_array(result),score=score+points,correct_count=correct_count+case when correct then 1 else 0 end,cursor=cursor+1,issued_at=null,status=case when question_index=9 then 'completed' else 'playing' end,finished_at=case when question_index=9 then clock_timestamp() end,elapsed_ms=case when question_index=9 then elapsed end where id=s.id;
+ return result;
+end $$;
+create function timed_quiz_leaderboard(kind text,period date default null) returns table(learner text,points bigint,elapsed_ms bigint,correct_count integer) language sql stable security definer set search_path=public as $$
+ with hard as (select s.user_id,sum(s.score)::bigint points,max(s.finished_at) finish from quiz_sets s join profiles p on p.id=s.user_id where is_active() and kind='hard' and s.category='hard' and s.status='completed' and not p.suspended and s.month=coalesce(period,(date_trunc('month',now() at time zone 'UTC'))::date) group by s.user_id),speed as (select distinct on(s.user_id) s.user_id,s.score,s.elapsed_ms,s.correct_count from quiz_sets s join profiles p on p.id=s.user_id where is_active() and kind='speed' and s.category='speed' and s.status='completed' and s.correct_count=10 and not p.suspended order by s.user_id,s.elapsed_ms,s.finished_at)
+ select '☆'||p.username,h.points,null::bigint,null::integer from hard h join profiles p on p.id=h.user_id order by h.points desc,h.finish,p.username limit 100
+$$;
+-- Separate function keeps speed ordering numeric and requires all ten correct.
+create function speed_quiz_leaderboard() returns table(learner text,elapsed_ms bigint) language sql stable security definer set search_path=public as $$ select '☆'||p.username,min(s.elapsed_ms) from quiz_sets s join profiles p on p.id=s.user_id where is_active() and s.category='speed' and s.status='completed' and s.correct_count=10 and not p.suspended group by p.id order by min(s.elapsed_ms),p.username limit 100 $$;
+create table quiz_monthly_rewards(id uuid primary key default gen_random_uuid(),month date not null,user_id uuid not null references profiles,rank integer not null check(rank between 1 and 3),amount_minor integer not null check(amount_minor in (1500,1000,500)),status text not null default 'pending_review' check(status in ('pending_review','credited','rejected')),reason text not null default '',unique(month,rank),unique(month,user_id));
+alter table quiz_monthly_rewards enable row level security;
+create policy quiz_rewards_read on quiz_monthly_rewards for select to authenticated using(user_id=auth.uid() or is_admin());
+grant select on quiz_monthly_rewards to authenticated;
+alter table creator_ledger add column quiz_reward_id uuid unique references quiz_monthly_rewards;
+create function close_quiz_month(period date) returns void language plpgsql security definer set search_path=public as $$ begin
+ if not is_admin() then raise exception 'Administrator permission required'; end if;
+ if period is null or period<>date_trunc('month',period)::date or period>=(date_trunc('month',now() at time zone 'UTC'))::date then raise exception 'Choose a completed calendar month'; end if;
+ perform pg_advisory_xact_lock(hashtextextended(period::text,9));
+ if exists(select 1 from quiz_monthly_rewards where month=period) then return; end if;
+ insert into quiz_monthly_rewards(month,user_id,rank,amount_minor)
+ select period,user_id,r::int,case r when 1 then 1500 when 2 then 1000 else 500 end from (select s.user_id,row_number() over(order by sum(s.score) desc,max(s.finished_at),s.user_id)r from quiz_sets s join profiles p on p.id=s.user_id where s.month=period and s.category='hard' and s.status='completed' and not p.suspended group by s.user_id having sum(s.score)>0)w where r<=3;
+end $$;
+create function review_quiz_reward(reward uuid,approve boolean,reason text) returns void language plpgsql security definer set search_path=public as $$ declare r quiz_monthly_rewards; begin
+ if not is_admin() then raise exception 'Administrator permission required'; end if;
+ if approve is null or reason is null or length(trim(reason))<5 then raise exception 'Explain reward review'; end if;
+ select * into r from quiz_monthly_rewards where id=reward and status='pending_review' for update;
+ if not found then raise exception 'Pending reward not found'; end if;
+ if approve then insert into creator_ledger(user_id,quiz_reward_id,amount,currency) values(r.user_id,r.id,r.amount_minor/100.0,'USD'); end if;
+ update quiz_monthly_rewards set status=case when approve then 'credited' else 'rejected' end,reason=trim(review_quiz_reward.reason) where id=r.id;
+ insert into audit_log(actor_id,entity_id,action,reason) values(auth.uid(),r.id,'quiz.reward',trim(review_quiz_reward.reason));
+end $$;
+revoke all on function start_quiz(text),quiz_next(uuid),submit_quiz_answer(uuid,integer,integer),timed_quiz_leaderboard(text,date),speed_quiz_leaderboard(),close_quiz_month(date),review_quiz_reward(uuid,boolean,text) from public,anon;
+grant execute on function start_quiz(text),quiz_next(uuid),submit_quiz_answer(uuid,integer,integer),timed_quiz_leaderboard(text,date),speed_quiz_leaderboard(),close_quiz_month(date),review_quiz_reward(uuid,boolean,text) to authenticated;
+create or replace function quiz_leaderboard() returns table(learner text,points bigint) language sql stable security definer set search_path=public as $$ select '☆'||p.username,sum(a.points) from quiz_answers a join profiles p on p.id=a.user_id where not p.suspended group by p.id order by sum(a.points) desc,p.username $$;
+
+
+-- 010_learning_media.sql
+alter table entries add column media_type text not null default 'document' check(media_type in ('document','video'));
+update entries set media_type='video' where kind='reel';
+alter table classrooms drop constraint classrooms_grade_check;
+alter table classrooms add constraint classrooms_grade_check check(grade in ('Grade 1','Grade 2','Grade 3','Grade 4','Grade 5','Grade 6','Grade 7','Form 1','Form 2','Form 3','Form 4','Form 5','Form 6','Level 14','Level 15','Level 16','Level 17','Level 18','Level 19','Level 20'));
+create or replace function validate_resource_grade() returns trigger language plpgsql set search_path=public as $$ begin
+ if new.kind in ('book','course','reel') and not exists(select 1 from education_levels where label=new.level or canonical_grade(ordinal)=new.level) then raise exception 'Choose an exact resource grade'; end if;
+ return new;
+end $$;
+create table pronunciation_audio(id uuid primary key default gen_random_uuid(),language_code text not null,phrase text not null,path text not null,speaker text not null,permission_record text not null check(length(trim(permission_record))>=10),consent_confirmed boolean not null check(consent_confirmed),active boolean not null default true,unique(language_code,phrase));
+alter table pronunciation_audio enable row level security;
+create policy pronunciation_read on pronunciation_audio for select using(active or is_admin());
+create policy pronunciation_admin on pronunciation_audio for all to authenticated using(is_admin()) with check(is_admin());
+revoke all on pronunciation_audio from anon,authenticated;
+grant select(id,language_code,phrase,path,speaker,active) on pronunciation_audio to authenticated;
+grant insert,update,delete on pronunciation_audio to authenticated;
+insert into storage.buckets(id,name,public,file_size_limit,allowed_mime_types) values('pronunciation','pronunciation',false,10485760,array['audio/mpeg','audio/mp3','audio/wav','audio/x-wav','audio/mp4']);
+create policy pronunciation_upload on storage.objects for insert to authenticated with check(bucket_id='pronunciation' and is_admin());
+create policy pronunciation_files on storage.objects for select to authenticated using(bucket_id='pronunciation' and is_active() and exists(select 1 from pronunciation_audio where path=name and active));
+
+
+-- 011_admin_signup.sql
+-- Admin selection is a request, never a privileged role assignment.
+create table public.admin_access_requests (
+ user_id uuid primary key references public.profiles(id) on delete cascade,
+ status text not null default 'pending' check(status in ('pending','approved','rejected')),
+ reason text not null default '', reviewed_by uuid references public.profiles(id),
+ created_at timestamptz not null default now()
+);
+alter table public.admin_access_requests enable row level security;
+create function public.is_owner() returns boolean language sql stable security definer set search_path=public as $$
+ select exists(select 1 from profiles where id=auth.uid() and role='owner' and not suspended)
+$$;
+create policy admin_requests_read on public.admin_access_requests for select to authenticated
+ using(public.is_active() and (user_id=auth.uid() or public.is_owner()));
+grant select on public.admin_access_requests to authenticated;
+create function public.capture_admin_signup() returns trigger language plpgsql security definer set search_path=public as $$ begin
+ if exists(select 1 from auth.users where id=new.id and raw_user_meta_data->>'account_type'='admin') then
+  insert into admin_access_requests(user_id) values(new.id);
+ end if;
+ return new;
+end $$;
+create trigger capture_admin_signup after insert on public.profiles for each row execute function public.capture_admin_signup();
+create function public.review_admin_access(target_user uuid, approve boolean, decision_reason text) returns void
+ language plpgsql security definer set search_path=public as $$ begin
+ if not is_owner() then raise exception 'Owner permission required'; end if;
+ if target_user=auth.uid() then raise exception 'You cannot review your own request'; end if;
+ if approve is null or decision_reason is null or length(trim(decision_reason)) not between 5 and 2000 then raise exception 'Explain your decision in 5-2000 characters'; end if;
+ perform 1 from admin_access_requests where user_id=target_user and status='pending' for update;
+ if not found then raise exception 'Pending request not found'; end if;
+ perform 1 from profiles where id=target_user and not suspended and role not in ('admin','owner') for update;
+ if not found then raise exception 'An active non-administrative account is required'; end if;
+ if approve then update profiles set role='admin' where id=target_user; end if;
+ update admin_access_requests set status=case when approve then 'approved' else 'rejected' end,
+ reason=trim(decision_reason),reviewed_by=auth.uid() where user_id=target_user;
+ insert into audit_log(actor_id,entity_id,action,reason) values(auth.uid(),target_user,'admin_access.'||case when approve then 'approved' else 'rejected' end,trim(decision_reason));
+ insert into notifications(user_id,message) values(target_user,'Your admin access request was reviewed. Open Settings for the decision.');
+end $$;
+revoke all on function public.review_admin_access(uuid,boolean,text) from public;
+grant execute on function public.review_admin_access(uuid,boolean,text) to authenticated;
+
+
+-- 012_study_assistant.sql
+create table public.study_ai_settings (
+ id boolean primary key default true check(id), enabled boolean not null default false,
+ daily_user_limit integer not null default 10 check(daily_user_limit between 1 and 50),
+ daily_total_limit integer not null default 100 check(daily_total_limit between 1 and 2000)
+);
+insert into public.study_ai_settings(id) values(true);
+alter table public.study_ai_settings enable row level security;
+create policy study_settings_read on public.study_ai_settings for select to authenticated using(public.is_active());
+grant select on public.study_ai_settings to authenticated;
+create table public.study_ai_usage (
+ user_id uuid not null references public.profiles on delete cascade,
+ usage_day date not null, requests integer not null check(requests>0),
+ last_request_at timestamptz not null default now(), primary key(user_id,usage_day)
+);
+alter table public.study_ai_usage enable row level security;
+create policy study_usage_read on public.study_ai_usage for select to authenticated using(public.is_active() and user_id=auth.uid());
+grant select on public.study_ai_usage to authenticated;
+create function public.configure_study_ai(active boolean,user_limit integer,total_limit integer) returns void
+ language plpgsql security definer set search_path=public as $$ begin
+ if not is_owner() then raise exception 'Owner permission required'; end if;
+ if active is null or user_limit is null or total_limit is null then raise exception 'All settings required'; end if;
+ update study_ai_settings set enabled=active,daily_user_limit=user_limit,daily_total_limit=total_limit where id;
+ insert into audit_log(actor_id,action,reason,details) values(auth.uid(),'study_ai.configure','Owner updated study assistant settings',jsonb_build_object('enabled',active,'user_limit',user_limit,'total_limit',total_limit));
+end $$;
+revoke all on function public.configure_study_ai(boolean,integer,integer) from public;
+grant execute on function public.configure_study_ai(boolean,integer,integer) to authenticated;
+-- The edge function supplies its verified user ID. Never callable by app clients.
+create function public.reserve_study_ai(target_user uuid) returns integer
+ language plpgsql security definer set search_path=public as $$
+declare settings study_ai_settings; used integer; total integer; last_request timestamptz; today date := (now() at time zone 'UTC')::date;
+begin
+ perform pg_advisory_xact_lock(19472027);
+ if not exists(select 1 from profiles where id=target_user and not suspended) then raise exception 'AI_ACCOUNT_INACTIVE'; end if;
+ select * into settings from study_ai_settings where id;
+ if not settings.enabled then raise exception 'AI_DISABLED'; end if;
+ select requests,last_request_at into used,last_request from study_ai_usage where user_id=target_user and usage_day=today;
+ if last_request > now()-interval '10 seconds' then raise exception 'AI_TOO_FAST'; end if;
+ select coalesce(sum(requests),0) into total from study_ai_usage where usage_day=today;
+ if coalesce(used,0)>=settings.daily_user_limit or total>=settings.daily_total_limit then raise exception 'AI_DAILY_LIMIT'; end if;
+ insert into study_ai_usage(user_id,usage_day,requests) values(target_user,today,1)
+ on conflict(user_id,usage_day) do update set requests=study_ai_usage.requests+1,last_request_at=now();
+ return settings.daily_user_limit-coalesce(used,0)-1;
+end $$;
+revoke all on function public.reserve_study_ai(uuid) from public,anon,authenticated;
+grant execute on function public.reserve_study_ai(uuid) to service_role;
+
+
 notify pgrst, 'reload schema';
 commit;

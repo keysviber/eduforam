@@ -13,7 +13,7 @@ const assert = require("node:assert/strict");
   });
   const errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
-  await page.goto("http://127.0.0.1:8080");
+  await page.goto(process.env.TEST_BASE_URL || "http://127.0.0.1:8080");
   await page.getByText("What will you learn today?").waitFor();
   await page
     .getByRole("button", { name: "Create account", exact: true })
@@ -81,7 +81,7 @@ const assert = require("node:assert/strict");
   );
   assert.equal(
     await page.getByRole("button", { name: "Premier", exact: true }).count(),
-    0,
+    1,
   );
   await page.getByRole("button", { name: "Form 4", exact: true }).click();
   await page
@@ -115,18 +115,58 @@ const assert = require("node:assert/strict");
     .click();
   await page.getByRole("tab", { name: "Learn", exact: true }).click();
   await page.getByRole("button", { name: "Explore language lessons" }).click();
-  await page
-    .getByRole("button", { name: "2. Polite words", exact: false })
-    .isDisabled()
-    .then((v) => assert.equal(v, true));
-  await page.getByRole("button", { name: "Hello", exact: true }).click();
-  await page.getByRole("button", { name: "Good evening", exact: true }).click();
-  await page.getByRole("button", { name: "Goodbye", exact: true }).click();
-  await page.getByText("Category complete!", { exact: false }).waitFor();
+  assert.equal(
+    await page.getByText("Review question", { exact: false }).count(),
+    0,
+  );
   await page
     .getByRole("button", { name: "2. Polite words", exact: false })
     .click();
-  await page.getByText("French \u00b7 Polite words", { exact: true }).waitFor();
+  await page
+    .getByRole("button", { name: "Listen to Merci", exact: true })
+    .waitFor();
+  await page
+    .getByRole("button", { name: "Start review quiz", exact: false })
+    .click();
+  assert.equal(
+    await page
+      .getByRole("button", { name: "Listen to Merci", exact: true })
+      .count(),
+    0,
+  );
+  await page.getByRole("button", { name: "Goodbye", exact: true }).click();
+  await page
+    .getByText("Try again, or return to study for a refresher.")
+    .waitFor();
+  for (const answer of [
+    "Hello",
+    "Good evening",
+    "Goodbye",
+    "Thank you",
+    "Please",
+    "Sorry",
+    "One",
+    "Two",
+    "Three",
+    "My name is\u2026",
+    "How are you?",
+    "I am well",
+    "A book",
+    "A pen",
+    "A school",
+    "Water",
+    "Bread",
+    "An apple",
+  ]) {
+    await page.getByRole("button", { name: answer, exact: true }).click();
+  }
+  await page.getByText("Review complete!", { exact: false }).waitFor();
+  await page
+    .getByRole("button", { name: "Return to study", exact: true })
+    .click();
+  await page
+    .getByRole("button", { name: "2. Polite words", exact: false })
+    .click();
   await page
     .getByRole("button", { name: "Listen to Merci", exact: true })
     .waitFor();
@@ -244,7 +284,7 @@ const assert = require("node:assert/strict");
       JSON.stringify({ entries, grade: "Form 4" }),
     );
   });
-  await gradePage.goto("http://127.0.0.1:8080");
+  await gradePage.goto(process.env.TEST_BASE_URL || "http://127.0.0.1:8080");
   await gradePage.getByText("Your home - Form 4", { exact: true }).waitFor();
   for (const grade of ["Form 3", "Form 4", "Form 5"])
     await gradePage

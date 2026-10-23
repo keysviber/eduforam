@@ -6,7 +6,8 @@ import {
   Platform,
   Linking,
   AppState,
-} from "react-native";
+  Alert,
+} from "./Theme";
 import * as Notifications from "expo-notifications";
 import * as Device from "expo-device";
 import Constants from "expo-constants";
@@ -46,11 +47,39 @@ export async function disablePush() {
   }
   await AsyncStorage.removeItem("ef-push-token");
 }
-export function PushSettings({ userId }: { userId?: string }) {
+export function PushSettings({
+  userId,
+  promptOnly = false,
+}: {
+  userId?: string;
+  promptOnly?: boolean;
+}) {
   const [status, setStatus] = useState(
     "Enable notifications for review decisions and private support updates.",
   );
   const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (!promptOnly || !userId || Platform.OS === "web" || !Device.isDevice)
+      return;
+    let active = true;
+    void AsyncStorage.getItem(`ef-notification-prompt:${userId}`).then(
+      (value) => {
+        if (value || !active) return;
+        void AsyncStorage.setItem(`ef-notification-prompt:${userId}`, "asked");
+        Alert.alert(
+          "Allow Education Forum notifications?",
+          "Receive classroom, review and private support updates. You can change this in Settings.",
+          [
+            { text: "Not now", style: "cancel" },
+            { text: "Allow", onPress: () => void enable() },
+          ],
+        );
+      },
+    );
+    return () => {
+      active = false;
+    };
+  }, [userId, promptOnly]);
   async function enable() {
     if (busy) return;
     setBusy(true);
@@ -63,10 +92,6 @@ export function PushSettings({ userId }: { userId?: string }) {
       const projectId =
         Constants.easConfig?.projectId ||
         Constants.expoConfig?.extra?.eas?.projectId;
-      if (!projectId)
-        throw new Error(
-          "The app's Expo project must be linked before push notifications can be enabled.",
-        );
       if (Platform.OS === "android")
         await Notifications.setNotificationChannelAsync("updates", {
           name: "Education updates",
@@ -78,6 +103,10 @@ export function PushSettings({ userId }: { userId?: string }) {
       if (!permission.granted)
         throw new Error(
           "Notifications are disabled. Open device settings, allow notifications, then retry.",
+        );
+      if (!projectId)
+        throw new Error(
+          "Notification permission is saved. Device delivery will be available once the app's Expo project is linked.",
         );
       const token = (
         await timeout(Notifications.getExpoPushTokenAsync({ projectId }))
@@ -95,6 +124,8 @@ export function PushSettings({ userId }: { userId?: string }) {
       );
     } catch (e) {
       setStatus((e as Error).message);
+      if (promptOnly)
+        Alert.alert("Notification settings", (e as Error).message);
     } finally {
       setBusy(false);
     }
@@ -111,6 +142,7 @@ export function PushSettings({ userId }: { userId?: string }) {
     });
     return () => listener.remove();
   }, []);
+  if (promptOnly) return null;
   return (
     <View
       style={{

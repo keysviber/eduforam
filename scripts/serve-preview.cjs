@@ -1,7 +1,8 @@
 const http = require("node:http");
 const fs = require("node:fs");
 const path = require("node:path");
-const root = path.resolve("dist");
+const root = path.resolve(process.env.PREVIEW_ROOT || "dist");
+const port = Number(process.env.PORT || 8080);
 const types = {
   ".html": "text/html",
   ".js": "text/javascript",
@@ -37,6 +38,6 @@ http
       res.end(content);
     });
   })
-  .listen(8080, "127.0.0.1", () =>
-    console.log("Preview: http://127.0.0.1:8080"),
+  .listen(port, "127.0.0.1", () =>
+    console.log(`Preview: http://127.0.0.1:${port}`),
   );

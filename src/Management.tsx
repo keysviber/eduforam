@@ -1,7 +1,9 @@
 import React, { useEffect, useState } from "react";
-import { View, Text, TextInput, Pressable, StyleSheet } from "react-native";
+import { View, Text, TextInput, Pressable, StyleSheet } from "./Theme";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { backend } from "./backend";
+import { useBilling } from "./Billing";
+import { FeatureButton } from "./FeatureWorkflows";
 import { coreEducationRelease } from "./release";
 export type Plan = {
   id: string;
@@ -11,51 +13,137 @@ export type Plan = {
   benefits: string[];
   active: boolean;
 };
-export function Plans({ notify }: { notify: (s: string) => void }) {
-  const [plans, setPlans] = useState<Plan[]>([]);
-  useEffect(() => {
-    if (backend)
+export function Plans({
+  notify,
+  userId,
+}: {
+  notify: (s: string) => void;
+  userId?: string;
+}) {
+  const billing = useBilling();
+  const [plans, setPlans] = useState<Plan[]>([]),
+    [products, setProducts] = useState<
+      { product_id: string; plan_id: string }[]
+    >([]),
+    [access, setAccess] = useState<
+      { plan_id: string; expires_at: string | null }[]
+    >([]);
+  const [prices, setPrices] = useState<Record<string, string>>({}),
+    [busy, setBusy] = useState(false);
+  async function load() {
+    if (!backend) return;
+    const [p, items] = await Promise.all([
+      backend.from("plans").select("*").eq("active", true),
       backend
-        .from("plans")
-        .select("*")
+        .from("store_products")
+        .select("product_id,plan_id")
         .eq("active", true)
-        .then(({ data, error }) => {
-          if (error) notify(error.message);
-          else setPlans(data || []);
-        });
-    else
-      AsyncStorage.getItem("ef-plans")
-        .then((v) =>
-          setPlans(v ? JSON.parse(v).filter((p: Plan) => p.active) : []),
-        )
-        .catch(() => notify("Could not load plans."));
-  }, []);
+        .not("plan_id", "is", null),
+    ]);
+    if (p.error || items.error) throw p.error || items.error;
+    setPlans(p.data || []);
+    setProducts(items.data || []);
+    if (userId) {
+      const r = await backend.rpc("my_plan_access");
+      if (r.error) throw r.error;
+      setAccess(r.data || []);
+    }
+  }
+  async function act(fn: () => Promise<void>) {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await fn();
+    } catch (e) {
+      notify(
+        (e as Error).message ||
+          "Could not complete purchase. Try restoring purchases.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+  useEffect(() => {
+    void act(load);
+  }, [userId]);
   return (
-    <View>
-      {plans.map((p) => (
-        <View style={s.card} key={p.id}>
-          <Text style={s.title}>{p.name}</Text>
-          <Text style={s.price}>
-            {p.currency} {(p.price_minor / 100).toFixed(2)}
-          </Text>
-          {p.benefits.map((b) => (
-            <Text key={b} style={s.text}>
-              ✓ {b}
-            </Text>
-          ))}
-          <Pressable
-            style={s.button}
-            onPress={() =>
-              notify(
-                "Purchases are not enabled. Store billing and verified payment processing must be connected first.",
-              )
-            }
-          >
-            <Text style={s.buttonText}>View subscription availability</Text>
-          </Pressable>
-        </View>
-      ))}
-      {plans.length === 0 && <Text style={s.text}>No active plans yet.</Text>}
+    <View style={s.card}>
+      <Text style={s.title}>Premier and subscriptions</Text>
+      <Text>
+        Plans are managed by the platform. Final prices and renewal terms are
+        shown by your app store before purchase.
+      </Text>
+      <FeatureButton
+        label="Refresh plans"
+        disabled={busy || !backend}
+        onPress={() => void act(load)}
+      />
+      {!plans.length && <Text>No active plans have been published yet.</Text>}
+      {plans.map((p) => {
+        const product = products.find((x) => x.plan_id === p.id),
+          entitled = access.find((x) => x.plan_id === p.id);
+        return (
+          <View key={p.id} style={s.card}>
+            <Text style={s.title}>{p.name}</Text>
+            {p.benefits.map((b) => (
+              <Text key={b}>{b}</Text>
+            ))}
+            {entitled ? (
+              <Text>
+                {entitled.expires_at
+                  ? "Access active until " +
+                    new Date(entitled.expires_at).toLocaleDateString()
+                  : "Verified access active"}
+              </Text>
+            ) : (
+              <>
+                <Text>
+                  {product
+                    ? prices[p.id] ||
+                      "Check the current store price before buying."
+                    : "Purchasing is not configured for this plan yet."}
+                </Text>
+                <FeatureButton
+                  disabled={busy || !userId || !product}
+                  label={
+                    prices[p.id]
+                      ? "Buy through app store - " + prices[p.id]
+                      : "Check store price"
+                  }
+                  onPress={() =>
+                    void act(async () => {
+                      if (!product) return;
+                      if (!prices[p.id]) {
+                        const price = await billing.price(
+                          product.product_id,
+                          true,
+                        );
+                        setPrices({ ...prices, [p.id]: price });
+                        return;
+                      }
+                      await billing.purchase(product.product_id, true);
+                      await load();
+                      notify("Purchase verified and access refreshed.");
+                    })
+                  }
+                />
+              </>
+            )}
+          </View>
+        );
+      })}
+      <FeatureButton
+        label="Restore plan purchases"
+        disabled={busy || !userId}
+        onPress={() =>
+          void act(async () => {
+            await billing.restore();
+            await load();
+            notify("Verified plan access refreshed.");
+          })
+        }
+      />
+      {!userId && <Text>Sign in to buy or restore a plan.</Text>}
     </View>
   );
 }
@@ -71,6 +159,8 @@ export function Management({ notify }: { notify: (s: string) => void }) {
     [busy, setBusy] = useState(false),
     [feature, setFeature] = useState(""),
     [mode, setMode] = useState("free"),
+    [accessPlan, setAccessPlan] = useState(""),
+    [freeThrough, setFreeThrough] = useState(""),
     [viewRate, setViewRate] = useState("1"),
     [subscriberRate, setSubscriberRate] = useState("1"),
     [threshold, setThreshold] = useState("10"),
@@ -222,6 +312,7 @@ export function Management({ notify }: { notify: (s: string) => void }) {
                 {p.name} · {p.currency} {(p.price_minor / 100).toFixed(2)}
               </Text>
               <Text style={s.text}>{p.active ? "Active" : "Inactive"}</Text>
+              <Text selectable>Plan ID: {p.id}</Text>
               {button("Edit plan", () => {
                 setId(p.id);
                 setName(p.name);
@@ -312,7 +403,21 @@ export function Management({ notify }: { notify: (s: string) => void }) {
       )}
       {tab === "Feature access" && (
         <>
-          {field("Feature identifier", feature, setFeature)}
+          {["library_downloads", "video_lessons", "language_courses"].map(
+            (key) => (
+              <FeatureButton
+                key={key}
+                label={(feature === key ? "Selected: " : "") + key}
+                onPress={() => setFeature(key)}
+              />
+            ),
+          )}
+          {field("Plan UUID for paid access", accessPlan, setAccessPlan)}
+          {field(
+            "Temporarily free until (ISO date, optional)",
+            freeThrough,
+            setFreeThrough,
+          )}
           <View style={s.tabs}>
             {["free", "individual", "premier", "subscription"].map((m) => (
               <Pressable
@@ -332,15 +437,28 @@ export function Management({ notify }: { notify: (s: string) => void }) {
                   throw new Error(
                     "Use a feature identifier such as library_downloads.",
                   );
-                await config("feature", {
-                  feature_key: feature,
-                  access_mode: mode,
+                if (!backend)
+                  throw new Error(
+                    "Connect the backend to manage enforced access rules.",
+                  );
+                if (freeThrough && !Number.isFinite(Date.parse(freeThrough)))
+                  throw new Error("Enter a valid date.");
+                const r = await backend.rpc("save_feature_access", {
+                  feature,
+                  mode,
+                  plan: accessPlan.trim() || null,
+                  free_through: freeThrough
+                    ? new Date(freeThrough).toISOString()
+                    : null,
+                  reason,
                 });
+                if (r.error) throw r.error;
               }),
           )}
           <Text style={s.text}>
-            Rules are stored centrally. Feature entitlement enforcement still
-            requires verified subscriptions and purchase receipts.
+            Download, video and course access is enforced by the database using
+            verified purchases. Configure store products before activating paid
+            access.
           </Text>
         </>
       )}
@@ -403,6 +521,25 @@ export function Management({ notify }: { notify: (s: string) => void }) {
               <Text style={s.text}>
                 {u.role} · {u.suspended ? "Suspended" : "Active"}
               </Text>
+              <View style={s.tabs}>
+                {["student", "teacher", "tutor", "creator"].map((role) => (
+                  <FeatureButton
+                    key={role}
+                    label={"Set role: " + role}
+                    disabled={busy || ["owner", "admin"].includes(u.role)}
+                    onPress={() =>
+                      void act(async () => {
+                        const r = await backend!.rpc("set_educator_role", {
+                          target_user: u.id,
+                          new_role: role,
+                          reason,
+                        });
+                        if (r.error) throw r.error;
+                      })
+                    }
+                  />
+                ))}
+              </View>
               {button(
                 u.moderator
                   ? "Remove moderator access"

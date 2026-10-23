@@ -12,6 +12,7 @@ export type Entry = {
   level: string;
   status: Status;
   file_path?: string;
+  media_type?: "document" | "video";
   video_format?: "lesson" | "talent";
   created_at: string;
   target: number;

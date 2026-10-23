@@ -1,3 +1,5 @@
+> Current update: see [22 October 2026 status and all 35 requested updates](UPDATE_STATUS.md). The dated notes below are historical.
+
 # Release readiness and specification coverage
 
 This is an initial implementation, not a claim that the complete specification is delivered. External credentials are only one category of remaining work: several product workflows still need development.

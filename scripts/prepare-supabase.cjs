@@ -4,6 +4,14 @@ const migrations = [
   "002_learning_release.sql",
   "003_community.sql",
   "004_services.sql",
+  "005_quiz_retry.sql",
+  "006_feature_workflows.sql",
+  "007_service_integrity.sql",
+  "008_identity_community.sql",
+  "009_timed_quiz.sql",
+  "010_learning_media.sql",
+  "011_admin_signup.sql",
+  "012_study_assistant.sql",
 ];
 const output =
   "-- Education Forum 1.1.0: one-time setup for a project without app tables.\n" +

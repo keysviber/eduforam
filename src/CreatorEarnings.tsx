@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { View, Text, TextInput, Pressable, Linking } from "react-native";
+import { View, Text, TextInput, Pressable, Linking } from "./Theme";
 import { backend } from "./backend";
 const box = {
   padding: 16,
@@ -119,6 +119,7 @@ export function ServiceAdministration() {
   const [product, setProduct] = useState("");
   const [entitlement, setEntitlement] = useState("");
   const [classroom, setClassroom] = useState("");
+  const [plan, setPlan] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
   async function load() {
@@ -232,14 +233,15 @@ export function ServiceAdministration() {
       ))}
       <Text style={{ fontWeight: "700" }}>Map a configured store product</Text>
       <Text>
-        Use the same non-consumable product ID on both stores. Classroom prices
-        at checkout come from the store. Attach all products to the remove_ads
-        entitlement in RevenueCat.
+        Use matching product IDs on both stores: non-consumables for classrooms
+        and remove-ads, subscriptions for plans. Checkout prices come from the
+        store. Attach all products to the remove_ads entitlement in RevenueCat.
       </Text>
       {[
         ["Product ID", product, setProduct],
         ["RevenueCat entitlement ID", entitlement, setEntitlement],
         ["Classroom UUID (blank for remove ads)", classroom, setClassroom],
+        ["Plan UUID (for a subscription/Premier product)", plan, setPlan],
       ].map(([label, value, setter]) => (
         <TextInput
           key={label as string}
@@ -251,12 +253,21 @@ export function ServiceAdministration() {
         />
       ))}
       {button("Save product mapping", async () => {
-        const r = await backend!.rpc("save_store_product", {
-          product: product.trim(),
-          entitlement: entitlement.trim(),
-          room: classroom.trim() || null,
-          reason,
-        });
+        if (plan.trim() && classroom.trim())
+          throw new Error("Choose a plan or classroom, not both.");
+        const r = plan.trim()
+          ? await backend!.rpc("save_plan_product", {
+              plan: plan.trim(),
+              product: product.trim(),
+              entitlement: entitlement.trim(),
+              reason,
+            })
+          : await backend!.rpc("save_store_product", {
+              product: product.trim(),
+              entitlement: entitlement.trim(),
+              room: classroom.trim() || null,
+              reason,
+            });
         if (r.error) throw r.error;
         setNotice(
           "Product mapping saved. Verify the store and RevenueCat configuration before selling.",

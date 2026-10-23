@@ -12,3 +12,6 @@ verify_jwt = false
 verify_jwt = false
 [functions.payout-transfer]
 verify_jwt = false
+
+[functions.study-assistant]
+verify_jwt = false

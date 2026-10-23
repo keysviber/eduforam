@@ -1,0 +1,281 @@
+EDUCATION FORUM — COMPLETE DEVELOPMENT CHANGES & REQUIREMENTS
+
+Please use this as the complete list of changes and improvements. Nothing from the previous list should be removed.
+
+1. DIRECT CHAT
+- Add direct one-to-one chat between users.
+
+2. LANGUAGE CHAT BOARD
+- Add a chat board inside the language-learning section.
+- Users can send messages in the language they are learning.
+- The purpose is to allow users to practise and see whether they understand what other people are saying.
+
+3. USERNAMES
+- Introduce usernames for every user.
+- Users should be able to create their own username.
+
+4. PROFILE PICTURES & ABOUT ME
+Every user should have:
+- Profile picture.
+- Simple "About Me" section.
+
+5. LEADERBOARD NAMES
+- Leaderboards should display people's names/usernames rather than anonymous identifiers.
+
+6. TEACHER CLASSROOM INVITATION LINK
+- When a teacher creates a classroom, the teacher should receive a unique invitation link for that classroom.
+- The teacher can copy and send the link to students.
+- Students click the link to go directly to the classroom/join page.
+- Students should not have to manually enter an invitation code.
+- The teacher should be able to see which students have joined their classroom.
+
+7. VIDEO WATERMARK
+- Add a watermark to videos.
+
+8. SHARE MY TALENT — TIKTOK/REELS-STYLE FEED
+- The "Share My Talent" video section should scroll like a simplified TikTok/Reels feed.
+- Videos should be displayed vertically.
+- Users should swipe up/down to move between videos.
+- One video should take up most/all of the screen.
+- Videos should automatically play when they become active.
+- This applies specifically to the Share My Talent section.
+- Do not mix Share My Talent videos with Video Lessons.
+
+9. VIDEO SHARE LINK
+- The share button currently does not provide a link.
+- Add a proper shareable link when users share a video.
+
+10. VIDEO UPLOAD — SUBJECT SELECTION
+- When uploading a video, users should select the subject from a list/dropdown.
+- They should not manually type the subject.
+
+11. INTERNATIONAL EDUCATION LEVELS
+The education-level system must support different countries and their terminology.
+
+Zimbabwe → UK approximate equivalent:
+- Form 1 → Year 8
+- Form 2 → Year 9
+- Form 3 → Year 10
+- Form 4 → Year 11
+- Form 5 / Lower 6 → Year 12
+- Form 6 / Upper 6 → Year 13
+
+UK → Zimbabwe approximate equivalent:
+- Year 8 → Form 1
+- Year 9 → Form 2
+- Year 10 → Form 3
+- Year 11 → Form 4
+- Year 12 → Form 5 / Lower 6
+- Year 13 → Form 6 / Upper 6
+
+The exact equivalence can vary between education systems, so the system should be designed to support additional countries rather than being built only around Zimbabwe/UK terminology.
+
+Example:
+A Zimbabwean student can select:
+Country: Zimbabwe
+Education level: Form 5
+
+A UK student can select:
+Country: United Kingdom
+Education level: Year 12
+
+The system should understand that these are broadly equivalent levels when determining quiz groups, learning content and other age/education-based features.
+
+12. CHANGE VOICE — LANGUAGE LEARNING
+- We want to change the current metallic/default language-learning voice.
+- We want to know whether we can provide our own human voice for the system to use.
+- Ask the developer whether we can provide recorded voice/audio and have the app use it for pronunciation.
+
+If possible, clarify what needs to be provided, such as:
+- High-quality voice recordings.
+- A specific script containing all words/sentences that need to be recorded.
+- Separate recordings for individual words/sentences if required.
+- WAV/MP3 or another required format.
+- Required recording quality/sample rate.
+- If an AI/custom voice model is required, tell us exactly what recordings are needed.
+
+The voice must only be used with the appropriate permission from the voice owner.
+
+13. SAFE ROOM APPLICATION
+- Users should be able to apply to become a reply/moderator of a Safe Room.
+- They should submit a video explaining why they believe they qualify.
+- The application should be reviewed before approval.
+
+14. VIEW PASSWORD
+- Add a show/hide password option when entering passwords.
+
+15. QUIZ SYSTEM — ADMIN QUESTION BANK
+- Admins should be able to create and manage quiz questions from the admin dashboard.
+- Admins should be able to:
+  - Create questions.
+  - Add answer options.
+  - Select the correct answer.
+  - Assign points.
+  - Assign questions to the appropriate age/form group.
+  - Edit questions.
+  - Delete questions.
+  - Continuously add new questions.
+
+Users should NOT all receive the exact same questions.
+
+16. QUIZ — THREE-GRADE GROUPS
+- Users should be divided into groups containing 3 educational grades/levels.
+- Each group should have its own question pool.
+
+Example:
+
+Group A:
+- Year/Form 7
+- Year/Form 8
+- Year/Form 9
+
+Group B:
+- Year/Form 10
+- Year/Form 11
+- Year/Form 12
+
+The exact grouping should be configurable.
+
+Users within the same 3-grade group can receive questions from the same question pool.
+
+However, users should not necessarily receive the exact same questions at the same time. Questions should be randomly selected from the appropriate group's question bank.
+
+17. QUIZ — 30-SECOND TIMER
+- Add a 30-second timer to the quiz.
+- If the 30 seconds runs out, the question is automatically marked as wrong.
+
+18. QUIZ — TWO CATEGORIES
+
+CATEGORY 1 — SPEED QUIZ
+- Use sets of 10 questions.
+- Questions should generally be simple/quick questions.
+- Example: 1 + 3.
+- Record the total time taken to complete the 10-question set.
+- The leaderboard should show the shortest completion times.
+
+CATEGORY 2 — HARD QUESTIONS
+- Harder questions.
+- Users earn points for correct answers.
+- Wrong answers remove points.
+- Leaderboard resets at the end of every month.
+- Monthly rewards:
+  - 1st place — $15
+  - 2nd place — $10
+  - 3rd place — $5
+
+19. QUIZ — 10-QUESTION SETS
+- Questions should be organised into sets of 10.
+- After completing all 10 questions, calculate the user's total score.
+- Transfer the result to the overall leaderboard.
+- Getting a question wrong removes 3 points while completing the set.
+
+20. QUIZ — ANSWER COLOURS
+- If the user selects the wrong answer, the answer they selected turns RED.
+- The correct answer turns GREEN.
+
+21. QUIZ — SOUND & MUSIC
+- Use the same constant background beat/music during the quiz.
+- Add a sound effect when a user gets an answer correct.
+- Add a different sound effect when a user gets an answer wrong.
+
+22. CLASSROOM — STUDENT VIEW
+- Users signed in as Students should NOT see the "Create Classroom" option.
+- Only appropriate teacher accounts should have the ability to create classrooms.
+
+23. TEACHER ACCOUNT VERIFICATION
+When someone registers as a Teacher:
+- Their account should initially go into Pending status.
+- They must provide a picture of their ID.
+- They must provide a video of themselves teaching the subject they want to teach.
+- The teacher account should be reviewed/approved before going live.
+
+Once the teacher is approved:
+- Their account goes live.
+- Everything they post should go live instantly.
+- Their posts should not require individual approval after the teacher has been approved.
+
+24. VIDEO LESSONS SEPARATION
+- The Video Lessons section should only show Video Lessons.
+- Do not mix Video Lessons with videos uploaded to the Share My Talent/Reels section.
+
+25. LEARN SECTION — VIDEO UPLOADS
+- The Learn section currently only allows file attachments.
+- Add the ability to upload/attach videos as learning materials.
+
+26. SETTINGS
+Add a proper Settings section containing:
+- Dark theme.
+- Change profile.
+- Change grade/education level.
+
+Move "Change Grade" from its current location into Settings.
+
+27. UPLOADED MATERIAL — AUTHOR
+- Remove the requirement to manually display/type an author name for uploaded materials.
+- Automatically associate uploaded material with the user account that uploaded it.
+- The system should know who uploaded the material from their account.
+
+28. NOTIFICATION PERMISSION
+- Show a pop-up asking the user to allow notification permissions.
+- The purpose is to allow the user to receive app notifications.
+- The user should be able to accept or decline the permission.
+
+29. USERNAME SYMBOL
+When users create/display a username:
+- Use the ☆ symbol instead of a hashtag.
+- Example:
+  NOT: #Tapiwa123
+  USE: ☆Tapiwa123
+- The ☆ should be part of the visual username format wherever the username is displayed.
+
+30. POWERED BY XENUS
+Add the branding:
+
+Powered by Xenus
+
+Use this wherever the "Powered by" branding is required.
+
+31. INTERNATIONAL SUPPORT
+- The app should not be built only around Zimbabwean education terminology.
+- Support different countries and their education systems.
+- Country selection should be available during registration/profile setup.
+- Education levels should adjust appropriately according to the selected country.
+- The system should still be able to identify broadly equivalent educational levels for features such as quizzes and learning content.
+
+32. DATE OF BIRTH
+- When entering date of birth, use a date picker/calendar.
+- Users should select their date rather than manually typing it where possible.
+
+33. COUNTRY SELECTION
+- When selecting a country, provide a selectable country list/dropdown.
+- Users should not have to manually type their country.
+
+34. INVITATION LINKS
+- Use invitation links instead of manually entered invitation codes where invitations are required.
+- This particularly applies to teachers inviting students into classrooms.
+
+35. GENERAL SELECTION/DROPDOWN IMPROVEMENT
+Where practical, use selectable options/dropdowns rather than making users manually type information.
+
+This applies particularly to:
+- Country.
+- Date of birth.
+- Subject.
+- Grade/education level.
+- Other predefined categories.
+
+FINAL SUMMARY
+
+The main areas being changed are:
+
+1. Communication — Direct chat + language chat board.
+2. Profiles — Usernames, ☆ symbol, profile pictures and About Me.
+3. Classrooms — Teacher verification, invitation links and student/teacher permissions.
+4. Videos — Watermarks, shareable links, Share My Talent Reels-style feed and separate Video Lessons.
+5. Education system — UK, Zimbabwe and future international grade support.
+6. Language learning — Customisable voice.
+7. Safe Rooms — Application and video verification.
+8. Quiz — Admin-controlled question bank, 3-grade groups, randomised questions, timers, points, leaderboards, rewards, sounds and answer colours.
+9. Settings — Dark mode, profile changes, grade changes and notifications.
+10. Learning materials — Video uploads and automatic account ownership.
+11. Branding — Powered by Xenus.
